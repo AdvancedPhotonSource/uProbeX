@@ -9,6 +9,33 @@
 #include <QJsonDocument>
 #include "core/str_defines.h"
 
+
+const Eigen::Index Counter1 = 0;
+const Eigen::Index Counter2 = 1;
+const Eigen::Index Counter3 = 2;
+const Eigen::Index I7_Y_ds = 3;
+const Eigen::Index I8_Y_us_ob = 4;
+const Eigen::Index I9_Y_us_ib = 5;
+const Eigen::Index I12_Z = 6;
+const Eigen::Index I15_X = 7;
+const Eigen::Index C1_radial = 8;
+const Eigen::Index C2_radial = 9;
+const Eigen::Index C3_radial = 10;
+const Eigen::Index C4_axial = 11;
+const Eigen::Index C5_axial = 12;
+const Eigen::Index C6_axial = 13;
+const Eigen::Index C7_radial = 14;
+const Eigen::Index I3_HKB_us = 15;
+const Eigen::Index I4_HKB_ds = 16;
+const Eigen::Index I5_VKB_us = 17;
+const Eigen::Index I6_VKB_ds = 18;
+const Eigen::Index I10_X_us = 19;
+const Eigen::Index I11_X_ds = 20;
+const Eigen::Index I13_HKB_us = 21;
+const Eigen::Index I14_HKB_ds = 22;
+const Eigen::Index I1_VKB_us = 23;
+
+
 /*----------------src/mvc/MapsH5Model.cpp \-----------------------------------------------------------*/
 
 std::mutex MapsH5Model::_mutex;
@@ -130,7 +157,8 @@ bool MapsH5Model::getAnalyzedQuantified(const std::string& analysis_type, const 
             {
                 if(calib.count(itr.first) > 0)
                 {
-                    out_counts[itr.first] = itr.second / quant_scaler/ calib.at(itr.first);
+                    out_counts[itr.first] = itr.second / quant_scaler;
+                    out_counts[itr.first] /= (calib.at(itr.first));
                     float min_coef = out_counts.at(itr.first).minCoeff();
                     out_counts[itr.first] = out_counts.at(itr.first).unaryExpr([min_coef](float v) { return std::isfinite(v) ? v : min_coef; });
                 }
@@ -280,6 +308,16 @@ void MapsH5Model::saveAllRoiMaps(QString savename)
         json_roi_object[STR_MAP_ROI_COLOR.c_str()] = icolor;
         json_roi_object[STR_MAP_ROI_COLOR_ALPHA.c_str()] = itr.second.color_alpha;
 
+        QJsonArray json_scalers;
+        for(auto sitr : itr.second.scaler_sum_map)
+        {
+            QJsonObject json_scaler;
+            json_scaler[sitr.first.c_str()] = sitr.second;
+            json_scalers.append(json_scaler);
+        }
+
+        json_roi_object[STR_SCALERS.c_str()] = json_scalers;
+
         // save pixel locations
         QJsonArray json_roi_pixels;
         for (auto& pItr : itr.second.pixel_list)
@@ -357,8 +395,6 @@ void MapsH5Model::saveAllRoiMaps()
 
 void MapsH5Model::loadAllRoiMaps()
 {
-
-    bool resave = false;
     QDir model_dir = _dir;
     model_dir.cdUp();
     model_dir.cdUp();
@@ -370,7 +406,14 @@ void MapsH5Model::loadAllRoiMaps()
 
     QFileInfo finfo(_dir.absolutePath());
     QString roi_file_name = model_dir.absolutePath() + QDir::separator() + finfo.baseName() + ".r0i";
+    load_roi_map(roi_file_name, finfo.fileName());
+}
 
+//---------------------------------------------------------------------------
+
+void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
+{
+    bool resave = false;
     QFile roiFile(roi_file_name);
     if (!roiFile.open(QIODevice::ReadOnly))
     {
@@ -404,6 +447,20 @@ void MapsH5Model::loadAllRoiMaps()
                 ppair.second = pixelPair[1].toInt();
                 mroi.pixel_list.push_back(ppair);
             }
+
+            QJsonArray jsonScalers = jsonRoi[STR_SCALERS.c_str()].toArray();
+            for (int j = 0; j < jsonScalers.size(); ++j)
+            {
+                QJsonObject scalerObj = jsonScalers[j].toObject();
+                QString key;
+                for (auto sitr : scalerObj.keys())
+                {
+                    key = sitr;
+                    break;
+                }
+                mroi.scaler_sum_map[key.toStdString()] = scalerObj.value(key).toDouble();
+            }
+
             // load array of int spectras
             if (jsonRoi.contains(STR_MAP_ROI_INT_SPEC.c_str()) && jsonRoi[STR_MAP_ROI_INT_SPEC.c_str()].isArray()) // if we have the int spec for this file
             {
@@ -416,7 +473,7 @@ void MapsH5Model::loadAllRoiMaps()
                         QString filename = json_int_spec[STR_MAP_ROI_INT_SPEC_FILENAME.c_str()].toString();
                         std::string stdFilename = filename.toStdString();
                         // if we found our int spectra then load it
-                        if (filename == finfo.fileName())
+                        if (filename == base_filename)
                         {
                             QJsonArray json_spec_arr = json_int_spec[STR_SPECTRA.c_str()].toArray();
                             mroi.int_spec[stdFilename].resize(json_spec_arr.size());
@@ -440,14 +497,15 @@ void MapsH5Model::loadAllRoiMaps()
 
             if (false == int_spec_loaded)
             {
-                std::string stdFileName = finfo.fileName().toStdString();
+                std::string stdFileName = base_filename.toStdString();
+                std::unordered_map<std::string, double> scaler_sum_map;
                 // load it 
-                if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_dir.absolutePath().toStdString(), &(mroi.int_spec[stdFileName]), mroi.pixel_list))
+                if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_dir.absolutePath().toStdString(), mroi.pixel_list, &(mroi.int_spec[stdFileName]), scaler_sum_map))
                 {
                     QJsonArray jsonIntSpecArr = jsonRoi[STR_MAP_ROI_INT_SPEC.c_str()].toArray();
 
                     QJsonObject json_int_spec;
-                    json_int_spec[STR_MAP_ROI_INT_SPEC_FILENAME.c_str()] = finfo.fileName();
+                    json_int_spec[STR_MAP_ROI_INT_SPEC_FILENAME.c_str()] = base_filename;
 
                     QJsonArray json_spec;
                     for (auto& iItr : mroi.int_spec[stdFileName])
@@ -462,6 +520,18 @@ void MapsH5Model::loadAllRoiMaps()
 
                     jsonIntSpecArr.append(json_int_spec);
                     jsonRoi[STR_MAP_ROI_INT_SPEC.c_str()] = jsonIntSpecArr;
+
+                    QJsonArray json_scalers;
+                    for(auto sitr : scaler_sum_map)
+                    {
+                        QJsonObject json_scaler;
+                        json_scaler[sitr.first.c_str()] = sitr.second;
+                        json_scalers.append(json_scaler);
+                    }
+
+                    jsonRoi[STR_SCALERS.c_str()] = json_scalers;
+
+
                     rois[i] = jsonRoi;
                     resave = true;
                 }
@@ -780,9 +850,6 @@ bool MapsH5Model::load(QString filepath)
        
     return _is_fully_loaded;
 }
-
-//---------------------------------------------------------------------------
-
 
 //------------------------------------------------------------------------------------------------------------------
 //-----------------------------------------------Version 10---------------------------------------------------------
@@ -1113,6 +1180,8 @@ bool MapsH5Model::_load_integrated_spectra_9(hid_t maps_grp_id)
     H5Sselect_hyperslab (counts_dspace_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
     error = H5Dread (counts_dset_id, H5T_NATIVE_DOUBLE, memoryspace_id, counts_dspace_id, H5P_DEFAULT, (void*)(_integrated_spectra.data()));
 
+    _integrated_spectra.set_nan_to_near_zero();
+
     delete []dims_out;
     H5Sclose(memoryspace_id);
 
@@ -1138,6 +1207,7 @@ bool MapsH5Model::_load_integrated_spectra_9(hid_t maps_grp_id)
         error = H5Dread(max_chan_spec_id, H5T_NATIVE_DOUBLE, memoryspace_id, max_chan_dspace_id, H5P_DEFAULT, (void*)(fit_int_spec->data()));
         if (error > -1)
         {
+            *fit_int_spec = fit_int_spec->unaryExpr([](double v) { return std::isfinite(v)? v : 0.0000001f; });
             _max_chan_spec_dict.insert({ "Max_Channels", fit_int_spec });
             
         }
@@ -1942,7 +2012,10 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
         if(dataspace_id > -1)
         {
             hid_t error = H5Dread(scan_type_id, memtype, dataspace_id, dataspace_id, H5P_DEFAULT, (void*)&tmp_name[0]);
-            _scan_type_as_str = std::string(tmp_name);
+            if(error == 0)
+            {
+                _scan_type_as_str = std::string(tmp_name);
+            }
             H5Sclose(dataspace_id);
         }
         H5Dclose(scan_type_id);
@@ -1953,6 +2026,10 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
         if(dataspace_id > -1)
         {
             hid_t error = H5Dread(req_rows_id, H5T_NATIVE_INT32, dataspace_id, dataspace_id, H5P_DEFAULT, (void*)&_requested_rows);
+            if(error != 0)
+            {
+                _requested_rows = 0;
+            }
             H5Sclose(dataspace_id);
         }
         H5Dclose(req_rows_id);
@@ -1963,6 +2040,10 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
         if(dataspace_id > -1)
         {
             hid_t error = H5Dread(req_cols_id, H5T_NATIVE_INT32, dataspace_id, dataspace_id, H5P_DEFAULT, (void*)&_requested_cols);
+            if(error != 0)
+            {
+                _requested_cols = 0;
+            }
             H5Sclose(dataspace_id);
         }
         H5Dclose(req_cols_id);
@@ -1974,7 +2055,10 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
         if(dataspace_id > -1)
         {
             hid_t error = H5Dread(polarity_pattern_id, memtype, dataspace_id, dataspace_id, H5P_DEFAULT, (void*)&tmp_name2[0]);
-            _polarity_pattern_str = std::string(tmp_name2);
+            if(error == 0)
+            {
+                _polarity_pattern_str = std::string(tmp_name2);
+            }
             H5Sclose(dataspace_id);
         }
         H5Dclose(polarity_pattern_id);
@@ -2136,6 +2220,7 @@ bool MapsH5Model::_load_integrated_spectra_10(hid_t file_id)
                     H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
 
                     error = H5Dread(dset_id, H5T_NATIVE_DOUBLE, memoryspace_id, dataspace_id, H5P_DEFAULT, (void*)&(_lhcp_integrated_spectra)[0]);
+                    _lhcp_integrated_spectra.set_nan_to_near_zero();
                     H5Sclose(memoryspace_id);
                 }
             }
@@ -2170,6 +2255,7 @@ bool MapsH5Model::_load_integrated_spectra_10(hid_t file_id)
                     H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
 
                     error = H5Dread(dset_id, H5T_NATIVE_DOUBLE, memoryspace_id, dataspace_id, H5P_DEFAULT, (void*)&(_rhcp_integrated_spectra)[0]);
+                    _rhcp_integrated_spectra.set_nan_to_near_zero();
                     H5Sclose(memoryspace_id);
                 }
             }
@@ -2207,6 +2293,7 @@ bool MapsH5Model::_load_integrated_spectra_10(hid_t file_id)
                 error = H5Dread(dset_id, H5T_NATIVE_DOUBLE, memoryspace_id, dataspace_id, H5P_DEFAULT, (void*)&(*spectra)[0]);
                 if (error > -1)
                 {
+                    *spectra = spectra->unaryExpr([](double v) { return std::isfinite(v)? v : 0.0000001f; });
                     _max_chan_spec_dict.insert({ "Max_Channels", spectra });
 
                 }
@@ -2603,42 +2690,83 @@ bool MapsH5Model::_load_interferometer_10(hid_t maps_grp_id)
 
 void MapsH5Model::_genreate_maps_from_interferometer()
 {
-    unsigned int disc_x = 100;
-    unsigned int disc_y = 100;
-    if(_requested_cols > 0)
-    {
-        disc_x = _requested_cols-7;
-    }
+
+    unsigned int disc_x = 200;
+    unsigned int disc_y = 200;
+    
     if(_requested_rows > 0)
     {
-        disc_y = _requested_rows-6;
+        disc_y = _requested_rows;
+        if( (_interferometer_arr.rows()-1) > disc_y)
+        {
+            disc_x = (unsigned int)((_interferometer_arr.rows()-1) / disc_y);
+        }
+        else if(_requested_cols > 0)
+        {
+            disc_x = _requested_cols - 10;
+        }
     }
     // ISN currently saved 24 points
-    if(_interferometer_arr.cols() > 6)
+    if(_interferometer_arr.cols() > 22)
     {
         Eigen::Index x_axis_idx = 7;
         Eigen::Index y_axis_idx = 3;
-
+    
+/*
+ 
+avg_interf = interf_data.groupby('Counter3').mean()[1:]
+    triggers = avg_interf.index.values
+    if processing_method == 'basic':
+        x_pos = avg_interf['I15 (X)'].values/np.cos(-1*np.radians(th))
+        y_pos = avg_interf['I7 (Y ds)'].values
+    elif processing_method == 'averaging':
+        avg_interf = avg_interf - avg_interf.iloc[0]  # subtract the first point to set it as origin
+        x1 = avg_interf['I15 (X)'].values
+        x2 = avg_interf['I10 (X-us)'].values
+        x3 = avg_interf['I11 (X-ds)'].values
+        y1 = avg_interf['I7 (Y ds)'].values
+        y2 = avg_interf['I8 (Y us-ob)'].values
+        y3 = avg_interf['I9 (Y us-ib)'].values
+        z = avg_interf['I12 (Z)'].values
+        x_avg = (x1 + x2 + x3) / 3
+        y_avg = (y1 + y2 + y3) / 3
+        x_pos = -np.sqrt(x_avg**2 + z**2)
+        y_pos = y_avg
+*/
         logI<<"Generating maps using interferometer cols: x axis = interferometer[7], y axis = interferometer[3]\n";
         float min_x = std::numeric_limits<float>::max();
-        float max_x = std::numeric_limits<float>::min();
+        float max_x = -std::numeric_limits<float>::max();
 
         float min_y = std::numeric_limits<float>::max();
-        float max_y = std::numeric_limits<float>::min();
+        float max_y = -std::numeric_limits<float>::max();
         // last row is all 0's , need to fix in xrf_maps
-        
-        for(Eigen::Index r = 0; r <_interferometer_arr.rows(); r++)
-        {
-            min_x = std::min(min_x, _interferometer_arr(r,x_axis_idx));
-            max_x = std::max(max_x, _interferometer_arr(r,x_axis_idx));
+       
+        for(Eigen::Index r = 0; r <_interferometer_arr.rows()-1; r++)
+        {   
+            //basic 
+            //float xval = _interferometer_arr(r,x_axis_idx);
+            //float yval = _interferometer_arr(r,y_axis_idx);
 
-            min_y = std::min(min_y, _interferometer_arr(r,y_axis_idx));
-            max_y = std::max(max_y, _interferometer_arr(r,y_axis_idx));
+            float x1 = _interferometer_arr(r, I15_X);
+            float x2 = _interferometer_arr(r, I10_X_us);
+            float x3 = _interferometer_arr(r, I11_X_ds);
+            float y1 = _interferometer_arr(r, I7_Y_ds);
+            float y2 = _interferometer_arr(r, I8_Y_us_ob);
+            float y3 = _interferometer_arr(r, I9_Y_us_ib);
+            float z = _interferometer_arr(r, I12_Z);
+            float x_avg = (x1 + x2 + x3) / 3.0f;
+            float y_avg = (y1 + y2 + y3) / 3.0f;
+            float xval = - std::sqrt(std::pow(x_avg,2.0) + std::pow(z,2.0));
+            float yval = y_avg;
+
+            min_x = std::min(min_x, xval);
+            max_x = std::max(max_x, xval);
+
+            min_y = std::min(min_y, yval);
+            max_y = std::max(max_y, yval);
         }
         logI<<min_x<<" "<<max_x<<" : "<<min_y<<" "<<max_y<<"\n";
-        //unsigned int x_inc = (max_x - min_x) / disc_x;
-        //unsigned int y_inc = (max_y - min_y) / disc_y;
-
+        
         _x_axis.resize(disc_x);
         _y_axis.resize(disc_y);
 
@@ -2651,46 +2779,59 @@ void MapsH5Model::_genreate_maps_from_interferometer()
             for(auto& itr2: *(itr.second))
             {
                 tmp_analyzed_counts[itr.first][itr2.first].resize(itr2.second.rows(), itr2.second.cols());
-                memcpy(tmp_analyzed_counts[itr.first][itr2.first].data(), itr2.second.data(), itr2.second.rows()*itr2.second.cols()*sizeof(float));
-                itr2.second.resize(disc_y, disc_x);
-                itr2.second.Zero(disc_y, disc_x);
+                tmp_analyzed_counts[itr.first][itr2.first] = itr2.second;
+                itr2.second.setZero(disc_y, disc_x);
             }
         }
         for(auto& itr: _scalers)
         {
-            itr.second.resize(disc_y, disc_x);
-            itr.second.Zero(disc_y, disc_x);
+            itr.second.setZero(disc_y, disc_x);
         }
 
-        for(Eigen::Index r = 0; r <_interferometer_arr.rows(); r++)
+        float total_x = (max_x - min_x);
+        float total_y = (max_y - min_y);
+
+        for(Eigen::Index r = 0; r <_interferometer_arr.rows()-1; r++)
         {
-            float x_per = (_interferometer_arr(r,x_axis_idx) - min_x) / (max_x - min_x);
-            
+            // basic
+            //float x_val = _interferometer_arr(r,x_axis_idx);
+            //float y_val = _interferometer_arr(r,y_axis_idx);
+
+            // calc
+            float x1 = _interferometer_arr(r, I15_X);
+            float x2 = _interferometer_arr(r, I10_X_us);
+            float x3 = _interferometer_arr(r, I11_X_ds);
+            float y1 = _interferometer_arr(r, I7_Y_ds);
+            float y2 = _interferometer_arr(r, I8_Y_us_ob);
+            float y3 = _interferometer_arr(r, I9_Y_us_ib);
+            float z = _interferometer_arr(r, I12_Z);
+            float x_avg = (x1 + x2 + x3) / 3.0f;
+            float y_avg = (y1 + y2 + y3) / 3.0f;
+            float x_val = - std::sqrt(std::pow(x_avg,2.0) + std::pow(z,2.0));
+            float y_val = y_avg;
+
+            float x_per = (x_val - min_x) / (total_x);
             unsigned int x_idx = x_per * disc_x;
-
-            float y_per = (_interferometer_arr(r,y_axis_idx) - min_y) / (max_y - min_y); 
-            
+            float y_per = (y_val - min_y) / (total_y); 
             unsigned int y_idx = y_per * disc_y;
-            //unsigned int x_idx = _interferometer_arr(r,x_axis_idx) - min_x / x_inc;
-            //unsigned int y_idx = _interferometer_arr(r,y_axis_idx) - min_y / y_inc;
-            x_idx = std::min(x_idx, (disc_x-1));
-            y_idx = std::min(y_idx, (disc_y-1));
+            x_idx = std::clamp(x_idx, (unsigned int)0, (disc_x-1));
+            y_idx = std::clamp(y_idx, (unsigned int)0, (disc_y-1));
 
-            _x_axis[x_idx] = _interferometer_arr(r,x_axis_idx);
-            _y_axis[y_idx] = _interferometer_arr(r,y_axis_idx);
-
-            logI<<x_idx << " : "<< y_idx << "\n";
+            _x_axis[x_idx] = x_val;
+            _y_axis[y_idx] = y_val;
+            
+            logI<<"  ["<<x_idx << "] : "<<"  ["<< y_idx << "]\n";
             for(auto& itr: _analyzed_counts)
             {
-                tmp_analyzed_counts.emplace(itr.first, data_struct::Fit_Count_Dict<float>());
                 for(auto& itr2: *(itr.second))
                 {
-                    itr2.second(y_idx, x_idx) = tmp_analyzed_counts[itr.first][itr2.first](0,r);
+                    itr2.second(y_idx, x_idx) += tmp_analyzed_counts[itr.first][itr2.first](0,r);
                 }
             }
+
             for(auto& itr: _scalers)
             {
-                itr.second(y_idx, x_idx) =  tmp_scalers[itr.first](0, r);
+                itr.second(y_idx, x_idx) += tmp_scalers[itr.first](0, r);
             }
         }
             

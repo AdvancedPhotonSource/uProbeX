@@ -52,16 +52,18 @@ struct Map_ROI
     {
 
     }
-    Map_ROI(std::string name_, QColor color_, int color_alpha_, std::vector<std::pair<int, int>> pixel_list_, std::string filename, data_struct::Spectra<double> int_spec_)
+    Map_ROI(const std::string &name_, QColor color_, int color_alpha_, std::vector<std::pair<int, int>> pixel_list_, const std::string &filename, data_struct::Spectra<double> int_spec_, const std::unordered_map<std::string, double> &scaler_sum_map_)
     {
         name = name_;
         color = color_;
         color_alpha = color_alpha_;
         pixel_list = pixel_list_;
         int_spec[filename] = int_spec_;
+        scaler_sum_map = scaler_sum_map_;
     }
     std::string name;
     std::vector<std::pair<int, int>> pixel_list;
+    std::unordered_map<std::string, double> scaler_sum_map;
     // file name (usually detector)  and spectra
     std::map<std::string, data_struct::Spectra<double> > int_spec;
     QColor color;
@@ -123,6 +125,8 @@ public:
     void clear_analyzed_counts();
 
     bool load(QString filepath);
+
+    void load_roi_map(QString roi_file_name, QString base_filename);
 
     std::vector<std::string> count_names();
 
