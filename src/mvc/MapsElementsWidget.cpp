@@ -78,6 +78,10 @@ MapsElementsWidget::~MapsElementsWidget()
 
     _co_loc_widget->setModel(nullptr);
     _scatter_plot_widget->setModel(nullptr);
+    if(_roi_stats_diag != nullptr)
+    {
+        delete _roi_stats_diag;
+    }
 /* //this is done elsewhere . should refactor it to be smart pointer
     if(_model != nullptr)
     {
@@ -167,7 +171,7 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     _color_map_ledgend_lbl->setPixmap(QPixmap::fromImage(_color_maps_ledgend->convertToFormat(QImage::Format_RGB32)));
 
     _chk_disp_color_ledgend = new QCheckBox("Display Color Ledgend");
-    _chk_disp_color_ledgend->setChecked(Preferences::inst()->getValue(STR_LOG_SCALE_COLOR).toBool());
+    _chk_disp_color_ledgend->setChecked(Preferences::inst()->getValue(STR_DISPLAY_COLOR_LEDGEND).toBool());
     connect(_chk_disp_color_ledgend, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_log_color_changed);
 
     QWidget* color_maps_widgets = new QWidget();
@@ -180,7 +184,7 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     color_maps_widgets->setLayout(colormapsHBox);
 
     _chk_log_color = new QCheckBox("Log scale");
-    _chk_log_color->setChecked(Preferences::inst()->getValue(STR_DISPLAY_COLOR_LEDGEND).toBool());
+    _chk_log_color->setChecked(Preferences::inst()->getValue(STR_LOG_SCALE_COLOR).toBool());
     connect(_chk_log_color, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_log_color_changed);
 
     _chk_invert_y = new QCheckBox("Invert Y Axis");
@@ -244,7 +248,6 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     w_normalize->setLayout(hbox_normalize);
     w_normalize->setContentsMargins(0, 0, 0, 0);
     
-    connect(_contrast_widget, &ContrastWidget::global_contrast_change, this, &MapsElementsWidget::on_global_contrast_changed);
     connect(_contrast_widget, &ContrastWidget::call_redraw, this, &MapsElementsWidget::redrawCounts);
 
     _tw_image_controls->addTab(m_toolbar, "Zoom");
@@ -521,22 +524,6 @@ void MapsElementsWidget::_appendRoiTab()
 
 //---------------------------------------------------------------------------
 
-void MapsElementsWidget::on_global_contrast_changed(bool val)
-{
-    if (val)
-    {
-        m_imageViewWidget->setGlobalContrast(false);
-    }
-    else
-    {
-        m_imageViewWidget->setGlobalContrast(true);
-    }
-    
-    redrawCounts();
-}
-
-//---------------------------------------------------------------------------
-
 void MapsElementsWidget::plotPixelSpectra(const QPoint& pos)
 {
     /*
@@ -771,13 +758,13 @@ void MapsElementsWidget::openRoiStatsWidget()
             m_roiTreeModel->get_all_of_type(item.classId(), roi_list);
         }
 
-        const std::vector<float> x_axis = _model->get_x_axis();
-        const std::vector<float> y_axis = _model->get_y_axis();
+        const data_struct::ArrayXXr<float> x_axis = _model->get_x_axis();
+        const data_struct::ArrayXXr<float> y_axis = _model->get_y_axis();
 
-        int xidx = x_axis.size() / 2;
-        int yidx = y_axis.size() / 2;
+        int xidx = x_axis.cols() / 2;
+        int yidx = y_axis.rows() / 2;
 
-        float sq_area = ((x_axis[xidx+1] - x_axis[xidx]) * (y_axis[yidx+1] - y_axis[yidx]));
+        float sq_area = ((x_axis(0,xidx+1) - x_axis(0,xidx)) * (y_axis(yidx+1,0) - y_axis(yidx,0)));
 
         _roi_stats_diag->setData(_model->getDir(), _model->getDatasetName(), _cb_analysis->currentText(), _cb_normalize->currentText(), sq_area, fit_counts, roi_list, _normalizer, _calib_curve);
 
@@ -875,22 +862,28 @@ void MapsElementsWidget::onAnalysisSelect(QString name)
 void MapsElementsWidget::onElementSelect(QString name, int viewIdx)
 {
     // update label on element select since it could be scaler
-    if (_normalizer != nullptr && _calib_curve != nullptr)
+
+    int cnt = m_imageViewWidget->getViewCount();
+    for (int i = 0; i < cnt; i++)
     {
-        int cnt = m_imageViewWidget->getViewCount();
-        for (int i = 0; i < cnt; i++)
+        QString label = m_imageViewWidget->getLabelAt(i);
+        if (_normalizer != nullptr && _calib_curve != nullptr)
         {
-            QString label = m_imageViewWidget->getLabelAt(i);
             if (_calib_curve->calib_curve.count(label.toStdString()) > 0)
             {
                 m_imageViewWidget->setUnitLabel(i, "ug/cm2");
             }
-            else
-            {
-                m_imageViewWidget->setUnitLabel(i, "cts/s");
-            }
+        }
+        if(label == STR_ELT || label == STR_ERT)
+        {
+            m_imageViewWidget->setUnitLabel(i, "secs");
+        }
+        else
+        {
+            m_imageViewWidget->setUnitLabel(i, "cts/s");
         }
     }
+    
 
     if (_model != nullptr && _model->regionLinks().count(name) > 0)
     {
@@ -962,7 +955,7 @@ void MapsElementsWidget::onSelectElements()
     const std::map<std::string, data_struct::ArrayXXr<float>>* scalers = _model->getScalers();
 
     _element_select_dialog.setListData(element_counts, scalers);
-    if (_element_select_dialog.exec() != QDialog::Accepted)
+    if (_element_select_dialog.exec() == QDialog::Accepted)
     {
         QStringList itemList = _element_select_dialog.getSelection();
         m_imageViewWidget->clearLabels();
@@ -995,7 +988,20 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
     {
         _normalizer = nullptr;
         _calib_curve = nullptr;
-        m_imageViewWidget->setUnitLabels("cts/s");
+        
+        int cnt = m_imageViewWidget->getViewCount();
+        for (int i = 0; i < cnt; i++)
+        {
+            QString label = m_imageViewWidget->getLabelAt(i);
+            if (label == STR_ELT || label == STR_ERT)
+            {
+                m_imageViewWidget->setUnitLabel(i,"secs");
+            }
+            else
+            {
+                m_imageViewWidget->setUnitLabel(i,"cts/s");
+            }
+        }
     }
     else
     {
@@ -1020,6 +1026,10 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
             {
                 m_imageViewWidget->setUnitLabel(i, "ug/cm2");
             }
+            else if (label == STR_ELT || label == STR_ERT)
+            {
+                m_imageViewWidget->setUnitLabels("secs");
+            }
         }
     }
     else if(_normalizer != nullptr)
@@ -1028,7 +1038,15 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
         int cnt = m_imageViewWidget->getViewCount();
         for (int i = 0; i < cnt; i++)
         {
-            m_imageViewWidget->setUnitLabel(i, " ");
+            QString label = m_imageViewWidget->getLabelAt(i);
+            if (label == STR_ELT || label == STR_ERT)
+            {
+                m_imageViewWidget->setUnitLabel(i,"secs");
+            }
+            else
+            {
+                m_imageViewWidget->setUnitLabel(i, " ");
+            }
         }
     }
 
@@ -1043,9 +1061,9 @@ void MapsElementsWidget::setModel(MapsH5Model* model)
 {
     if (_model != model)
     {
-        _model = model;
         _normalizer = nullptr;
         _calib_curve = nullptr;
+        _model = model;
         model_updated();
         if (_model != nullptr)
         {
@@ -1104,6 +1122,9 @@ void MapsElementsWidget::setModel(MapsH5Model* model)
 
             if (scan_info != nullptr)
             {
+                _extra_pvs_table_widget->hide();
+                _extra_pvs_table_widget->setUpdatesEnabled(false);
+                _extra_pvs_table_widget->clear();
                 _extra_pvs_table_widget->setRowCount(scan_info->extra_pvs.size());
                 int i = 0;
                 for (const auto& itr : scan_info->extra_pvs)
@@ -1114,6 +1135,9 @@ void MapsElementsWidget::setModel(MapsH5Model* model)
                     _extra_pvs_table_widget->setItem(i, 3, new QTableWidgetItem(QString::fromLatin1(itr.description.c_str(), itr.description.length())));
                     i++;
                 }
+             
+                _extra_pvs_table_widget->setUpdatesEnabled(true);
+                _extra_pvs_table_widget->show();
             }
             // add map_roi's 
             // clear old roi's 
@@ -1135,10 +1159,6 @@ void MapsElementsWidget::setModel(MapsH5Model* model)
                 }
             }
 
-            _co_loc_widget->setModel(_model);
-            _scatter_plot_widget->setModel(_model);
-            _quant_widget->setModel(_model);
-
             QString analysis_text = _cb_analysis->currentText();
             if (analysis_text.length() > 0)
             {
@@ -1146,11 +1166,14 @@ void MapsElementsWidget::setModel(MapsH5Model* model)
                 _scatter_plot_widget->setAnalysisType(analysis_text);
             }
 
+            _co_loc_widget->setModel(_model);
+            _scatter_plot_widget->setModel(_model);
+            _quant_widget->setModel(_model);
+
             _motor_trans.setMotors(_model->get_x_axis(), _model->get_y_axis());
             
             annoTabChanged(m_tabWidget->currentIndex());
         }
-        m_imageWidgetToolBar->clickFill();
     }
 }
 
@@ -1469,8 +1492,9 @@ void MapsElementsWidget::model_updated()
             m_imageViewWidget->addLabel(val);
         }
     }
-    redrawCounts();
+    m_imageWidgetToolBar->clickFill();
 
+    redrawCounts();
     connect(_cb_normalize, &QComboBox::currentTextChanged, this, &MapsElementsWidget::onSelectNormalizer);
     connect(_cb_analysis, &QComboBox::currentTextChanged, this, &MapsElementsWidget::onAnalysisSelect);
 }
@@ -1664,7 +1688,7 @@ GenerateImageProp MapsElementsWidget::generate_image_props(const std::string ana
     }
     else
     {
-        if(!m_imageViewWidget->getMinMaxAt(grid_idx, props.contrast_min, props.contrast_max))
+        if(!m_imageViewWidget->getUpdatedMinMaxAt(grid_idx, props.contrast_min, props.contrast_max))
         {
             props.contrast_max = _contrast_widget->max_contrast_perc();
             props.contrast_min = _contrast_widget->min_contrast_perc();
@@ -1734,7 +1758,7 @@ void MapsElementsWidget::windowChanged(Qt::WindowStates oldState,
 {
     Q_UNUSED(oldState);
 
-    if(Qt::WindowMaximized || Qt::WindowActive == newState)
+    if(Qt::WindowMaximized == newState || Qt::WindowActive == newState)
     {
         m_imageViewWidget->resizeEvent(nullptr);
     }
@@ -1802,6 +1826,10 @@ void MapsElementsWidget::on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*
                     }
                 }
                 */
+            }
+            else
+            {
+                delete int_spectra;
             }
         }
     
@@ -2115,13 +2143,13 @@ void MapsElementsWidget::on_export_images()
 
         std::vector<std::string> normalizers = { STR_DS_IC , STR_US_IC, STR_US_FM, STR_SR_CURRENT, "Counts" };
 
-        const std::vector<float> x_axis = _model->get_x_axis();
-        const std::vector<float> y_axis = _model->get_y_axis();
+        const data_struct::ArrayXXr<float> x_axis = _model->get_x_axis();
+        const data_struct::ArrayXXr<float> y_axis = _model->get_y_axis();
 
         std::vector<std::string> analysis_types = _model->getAnalyzedTypes();
 
         size_t cur = 0;
-        size_t total = analysis_types.size() * x_axis.size() * y_axis.size() * normalizers.size();
+        size_t total = analysis_types.size() * x_axis.cols() * y_axis.rows() * normalizers.size();
         _export_maps_dialog->status_callback(cur, total);
 
 
@@ -2194,12 +2222,12 @@ void MapsElementsWidget::on_export_images()
                     }
                     out_stream << "\n";
 
-                    for (int yidx = 0; yidx < y_axis.size(); yidx++)
+                    for (int yidx = 0; yidx < y_axis.rows(); yidx++)
                     {
-                        for (int xidx = 0; xidx < x_axis.size(); xidx++)
+                        for (int xidx = 0; xidx < x_axis.cols(); xidx++)
                         {
 
-                            out_stream << yidx << " , " << xidx << " , " << y_axis.at(yidx) << " , " << x_axis.at(xidx) << " , ";
+                            out_stream << yidx << " , " << xidx << " , " << y_axis(yidx,0) << " , " << x_axis(0,xidx) << " , ";
 
                             for (auto& e_itr : element_counts)
                             {
@@ -2255,7 +2283,7 @@ void MapsElementsWidget::on_export_images()
                         {
                             int yidx = p_itr.second;
                             int xidx = p_itr.first;
-                            out_stream << yidx << " , " << xidx << " , " << y_axis.at(yidx) << " , " << x_axis.at(xidx) << " , ";
+                            out_stream << yidx << " , " << xidx << " , " << y_axis(yidx,0) << " , " << x_axis(0,xidx) << " , ";
 
                             for (auto& e_itr : element_counts)
                             {

@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <tiffio.h>
 #include "core/str_defines.h"
 
 
@@ -624,7 +625,7 @@ void MapsH5Model::getIntegratedSpectra(data_struct::Spectra<double>& out_spectra
 
 //---------------------------------------------------------------------------
 
-bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayTr<float> &x_arr, data_struct::ArrayTr<float> &y_arr)
+bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<float> &x_arr, data_struct::ArrayXXr<float> &y_arr)
 {
     std::string x_axis_loc_9 = "/MAPS/x_axis";
     std::string x_axis_loc_10 = "/MAPS/Scan/x_axis";
@@ -652,12 +653,13 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayTr<fl
     }
 
     y_id = H5Dopen(file_id, y_axis_loc_10.c_str(), H5P_DEFAULT);
-    if(x_id < 0)
+    if(y_id < 0)
     {
         logW<<"Error opening"<<y_axis_loc_10.c_str()<<"\n";
         y_id = H5Dopen(file_id, y_axis_loc_9.c_str(), H5P_DEFAULT);
         if(y_id < 0)
         {
+            H5Dclose(x_id);
             H5Fclose(file_id);
             logW<<"Error opening"<<y_axis_loc_9.c_str()<<"\n";
             return false;
@@ -669,19 +671,49 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayTr<fl
         hid_t x_space_id = H5Dget_space(x_id);
         hid_t y_space_id = H5Dget_space(y_id);
         
-        hsize_t x_dims_in[1] = { 0 };
-        hsize_t y_dims_in[1] = { 0 };
+        hsize_t x_dims_in[2] = { 0,0 };
+        hsize_t y_dims_in[2] = { 0,0 };
+        int dims = H5Sget_simple_extent_ndims(x_space_id);
         int xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
         int ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
         if (xstatus_n > -1 && ystatus_n > -1)
         {
-            x_arr.resize(x_dims_in[0]);
+            if(dims == 1)
+            {
+                x_arr.resize(1, x_dims_in[0]);
+                y_arr.resize(y_dims_in[0],1);
+            }
+            else if(dims == 2)
+            {
+                x_arr.resize(x_dims_in[0], x_dims_in[1]);
+                y_arr.resize(y_dims_in[0], y_dims_in[1]);
+            }
+            else
+            {
+                logE<<"Can not load dims size "<<dims<<"\n";
+                if (x_space_id > -1)
+                {
+                    H5Sclose(x_space_id);
+                }
+                if (y_space_id > -1)
+                {
+                    H5Sclose(y_space_id);
+                }
+                if (x_id > -1)
+                {
+                    H5Dclose(x_id);
+                }
+                if(y_id > -1)
+                {
+                    H5Dclose(y_id);
+                }
+                return false;
+            }
             hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, x_arr.data());
             if (error > 0)
             {
                 logW << "Could not load x_axis\n";
             }
-            y_arr.resize(y_dims_in[0]);
             error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, y_arr.data());
             if (error > 0)
             {
@@ -889,7 +921,7 @@ bool MapsH5Model::_load_quantification_9_single(hid_t maps_grp_id, std::string p
     dset_id = H5Dopen(maps_grp_id, path.c_str(), H5P_DEFAULT);
     if (dset_id < 0)
     {
-        logW << "Error opening group /MAPS/"<<path<<"\n";
+        logW << "Error opening group /MAPS/"<<path<<"\n"; 
         return false;
     }
     dspace_id = H5Dget_space(dset_id);
@@ -897,7 +929,9 @@ bool MapsH5Model::_load_quantification_9_single(hid_t maps_grp_id, std::string p
     channels_dset_id = H5Dopen(maps_grp_id, "channel_names", H5P_DEFAULT);
     if (channels_dset_id < 0)
     {
-        logW << "Error opening group /MAPS/channel_names\n";
+        logW << "Error opening group /MAPS/channel_names\n";    
+        H5Sclose(dspace_id);
+        H5Dclose(dset_id);
         return false;
     }
     channels_dspace_id = H5Dget_space(channels_dset_id);
@@ -906,6 +940,10 @@ bool MapsH5Model::_load_quantification_9_single(hid_t maps_grp_id, std::string p
     if (rank != 3)
     {
         logW << path << " rank is not equal to 3, unknown format!\n";
+        H5Sclose(channels_dspace_id);
+        H5Dclose(channels_dset_id);
+        H5Sclose(dspace_id);
+        H5Dclose(dset_id);
         return false;
     }
     hsize_t* dims_out = new hsize_t[rank];
@@ -1015,6 +1053,9 @@ bool MapsH5Model::_load_scalers_9(hid_t maps_grp_id)
     if (rank != 3)
     {
         logW << "Error getting rank for /MAPS/scalers\n";
+        H5Sclose(counts_dspace_id);
+        H5Dclose(counts_dset_id);
+        return false;
     }
     hsize_t* dims_out = new hsize_t[rank];
     unsigned int status_n = H5Sget_simple_extent_dims(counts_dspace_id, &dims_out[0], nullptr);
@@ -1101,20 +1142,51 @@ bool MapsH5Model::_load_scan_9(hid_t maps_grp_id)
         hid_t x_space_id = H5Dget_space(x_id);
         hid_t y_space_id = H5Dget_space(y_id);
 
-        hsize_t x_dims_in[1] = { 0 };
-        hsize_t y_dims_in[1] = { 0 };
+        hsize_t x_dims_in[2] = { 0,0 };
+        hsize_t y_dims_in[2] = { 0,0 };
+        int dims = H5Sget_simple_extent_ndims(x_space_id);
         int xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
         int ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
         if (xstatus_n > -1 && ystatus_n > -1)
         {
-            _x_axis.resize(x_dims_in[0]);
-            hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, &_x_axis[0]);
+            if(dims == 1)
+            {
+                _x_axis.resize(1, x_dims_in[0]);
+                _y_axis.resize(y_dims_in[0],1);
+            }
+            else if(dims == 2)
+            {
+                _x_axis.resize(x_dims_in[0], x_dims_in[1]);
+                _y_axis.resize(y_dims_in[0],y_dims_in[1]);
+            }
+            else
+            {
+                logE<<"Can not load dims size "<<dims<<"\n";
+                if (x_space_id > -1)
+                {
+                    H5Sclose(x_space_id);
+                }
+                if (y_space_id > -1)
+                {
+                    H5Sclose(y_space_id);
+                }
+                if (x_id > -1)
+                {
+                    H5Dclose(x_id);
+                }
+                if(y_id > -1)
+                {
+                    H5Dclose(y_id);
+                }
+                return false;
+            }
+            hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, _x_axis.data());
             if (error > 0)
             {
                 logW << "Could not load x_axis\n";
             }
-            _y_axis.resize(y_dims_in[0]);
-            error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, &_y_axis[0]);
+            
+            error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, _y_axis.data());
             if (error > 0)
             {
                 logW << "Could not load y_axis\n";
@@ -1164,6 +1236,9 @@ bool MapsH5Model::_load_integrated_spectra_9(hid_t maps_grp_id)
     if (rank != 1)
     {
         logW<<"Error opening group /MAPS/int_spec\n";
+        H5Sclose(counts_dspace_id);
+        H5Dclose(counts_dset_id);
+        return false;
     }
     hsize_t* dims_out = new hsize_t[rank];
     unsigned int status_n = H5Sget_simple_extent_dims(counts_dspace_id, &dims_out[0], nullptr);
@@ -1334,6 +1409,9 @@ bool MapsH5Model::_load_analyzed_counts_9(hid_t analyzed_grp_id, std::string gro
     if (rank != 3)
     {
         logW<<"Error opening group /MAPS/"<<group_name.c_str() << "\n";
+        H5Sclose(counts_dspace_id);
+        H5Dclose(counts_dset_id);
+        return false;
     }
     hsize_t* dims_out = new hsize_t[rank];
     unsigned int status_n = H5Sget_simple_extent_dims(counts_dspace_id, &dims_out[0], nullptr);
@@ -1517,7 +1595,6 @@ bool MapsH5Model::_load_quantifier(hid_t grp_id, std::string str_quantifier, std
         H5Dclose(dset_id);
         H5Dclose(channels_dset_id);
         logW << "Error opening space /MAPS/" << STR_CALIB_LABELS << "\n";
-        H5Dclose(dset_id);
         return false;
     }
 
@@ -1716,6 +1793,7 @@ bool MapsH5Model::_load_quantification_standard_10(hid_t maps_grp_id)
     ns_dset_id = H5Dopen(maps_grp_id, QUANT_V10_NUM_STANDARDS_STR.c_str(), H5P_DEFAULT);
     if (ns_dset_id < 0)
     {
+        H5Sclose(memoryspace_name_id);
         logW << "Error opening group /MAPS/" << QUANT_V10_NUM_STANDARDS_STR << "\n";
         return false;
     }
@@ -1764,7 +1842,7 @@ bool MapsH5Model::_load_quantification_standard_10(hid_t maps_grp_id)
             // element weight names
             std::string standard_weight_name_str = QUANT_V10_STANDARD_STR + std::to_string(i) + "/" + STR_ELEMENT_WEIGHTS_NAMES;
             wn_dset_id = H5Dopen(maps_grp_id, standard_weight_name_str.c_str(), H5P_DEFAULT);
-            if (st_dset_id < 0)
+            if (wn_dset_id < 0)
             {
                 logW << "Error opening group /MAPS/" << standard_weight_name_str << "\n";
                 continue;
@@ -1802,7 +1880,7 @@ bool MapsH5Model::_load_quantification_standard_10(hid_t maps_grp_id)
             // element weights
             std::string standard_weight_str = QUANT_V10_STANDARD_STR + std::to_string(i) + "/" + STR_ELEMENT_WEIGHTS;            
             w_dset_id = H5Dopen(maps_grp_id, standard_weight_str.c_str(), H5P_DEFAULT);
-            if (st_dset_id < 0)
+            if (w_dset_id < 0)
             {
                 logW << "Error opening group /MAPS/" << standard_weight_str << "\n";
                 continue;
@@ -1849,6 +1927,8 @@ bool MapsH5Model::_load_quantification_standard_10(hid_t maps_grp_id)
     {
         H5Dclose(ns_dset_id);
     }
+    H5Sclose(memoryspace_name_id);
+
     return true;
 }
 
@@ -1897,6 +1977,10 @@ bool MapsH5Model::_load_scalers_10(hid_t maps_grp_id)
     if (rank != 3)
     {
         logW << "Error getting rank for /MAPS/Scalers/Values\n";
+        H5Sclose(counts_dspace_id);
+        H5Dclose(counts_dset_id);
+        H5Gclose(sub_grp_id);
+        return false;
     }
     hsize_t* dims_out = new hsize_t[rank];
     unsigned int status_n = H5Sget_simple_extent_dims(counts_dspace_id, &dims_out[0], nullptr);
@@ -2081,10 +2165,6 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
                     data_struct::Extra_PV epv;
                     offset[0] = i;
                     H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
-                    H5Sselect_hyperslab(name_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
-                    H5Sselect_hyperslab(unit_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
-                    H5Sselect_hyperslab(val_id, H5S_SELECT_SET, offset, nullptr, count, nullptr);
-
 
                     memset(&tmp_name[0], 0, 254);
                     hid_t error = H5Dread(desc_id, memtype, memoryspace_id, dataspace_id, H5P_DEFAULT, (void*)&tmp_name[0]);
@@ -2141,20 +2221,51 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
         hid_t x_space_id = H5Dget_space(x_id);
         hid_t y_space_id = H5Dget_space(y_id);
         
-        hsize_t x_dims_in[1] = { 0 };
-        hsize_t y_dims_in[1] = { 0 };
+        hsize_t x_dims_in[2] = { 0,0 };
+        hsize_t y_dims_in[2] = { 0,0 };
+        int dims = H5Sget_simple_extent_ndims(x_space_id);
         int xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
         int ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
         if (xstatus_n > -1 && ystatus_n > -1)
         {
-            _x_axis.resize(x_dims_in[0]);
-            hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, &_x_axis[0]);
+            if(dims == 1)
+            {
+                _x_axis.resize(1, x_dims_in[0]);
+                _y_axis.resize(y_dims_in[0],1);
+            }
+            else if(dims == 2)
+            {
+                _x_axis.resize(x_dims_in[0], x_dims_in[1]);
+                _y_axis.resize(y_dims_in[0],y_dims_in[1]);
+            }
+            else
+            {
+                logE<<"Can not load dims size "<<dims<<"\n";
+                if (x_space_id > -1)
+                {
+                    H5Sclose(x_space_id);
+                }
+                if (y_space_id > -1)
+                {
+                    H5Sclose(y_space_id);
+                }
+                if (x_id > -1)
+                {
+                    H5Dclose(x_id);
+                }
+                if(y_id > -1)
+                {
+                    H5Dclose(y_id);
+                }
+                return false;
+            }
+            
+            hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, _x_axis.data());
             if (error > 0)
             {
                 logW << "Could not load x_axis\n";
             }
-            _y_axis.resize(y_dims_in[0]);
-            error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, &_y_axis[0]);
+            error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, _y_axis.data());
             if (error > 0)
             {
                 logW << "Could not load y_axis\n";
@@ -2170,11 +2281,17 @@ bool MapsH5Model::_load_scan_10(hid_t maps_grp_id)
             H5Sclose(y_space_id);
         }
 
-        H5Dclose(x_id);
-        H5Dclose(y_id);
 
     }
 
+    if (x_id > -1)
+    {
+        H5Dclose(x_id);
+    }
+    if(y_id > -1)
+    {
+        H5Dclose(y_id);
+    }
 
     return true;
 }
@@ -2535,8 +2652,11 @@ bool MapsH5Model::_load_analyzed_counts_10(hid_t analyzed_grp_id, std::string gr
                 }
 
 				_fit_int_spec_dict.insert({ group_name , spectra });
+                H5Sclose(memoryspace_id);
 			}
 		}
+        H5Sclose(dataspace_id);
+        H5Dclose(fit_int_spec_dset_id);
 	}
 	
     fit_int_spec_dset_id = H5Dopen(sub_grp_id, STR_FIT_INT_BACKGROUND.c_str(), H5P_DEFAULT);
@@ -2571,14 +2691,21 @@ bool MapsH5Model::_load_analyzed_counts_10(hid_t analyzed_grp_id, std::string gr
                     *spectra = *spectra / 2.0;
                 }
 				_fit_int_spec_dict.insert({ "Background" , spectra });
+                H5Sclose(memoryspace_id);
 			}
 		}
+        H5Sclose(dataspace_id);
+        H5Dclose(fit_int_spec_dset_id);
 	}
 
     int rank = H5Sget_simple_extent_ndims(counts_dspace_id);
     if (rank != 3)
     {
         logW<<"Error getting rank for  /MAPS/XRF_Analyzed/"<<group_name.c_str()<<"/Channel_Names\n";
+        H5Sclose(counts_dspace_id);
+        H5Dclose(counts_dset_id);
+        H5Gclose(sub_grp_id);
+        return false;
     }
     hsize_t* dims_out = new hsize_t[rank];
     unsigned int status_n = H5Sget_simple_extent_dims(counts_dspace_id, &dims_out[0], nullptr);
@@ -2767,8 +2894,8 @@ avg_interf = interf_data.groupby('Counter3').mean()[1:]
         }
         //logI<<min_x<<" "<<max_x<<" : "<<min_y<<" "<<max_y<<"\n";
         
-        _x_axis.resize(disc_x);
-        _y_axis.resize(disc_y);
+        _x_axis.resize(disc_y, disc_x);
+        _y_axis.resize(disc_y, disc_x);
 
         std::map<std::string, data_struct::Fit_Count_Dict<float>> tmp_analyzed_counts;
         std::map<std::string, data_struct::ArrayXXr<float>> tmp_scalers = _scalers;
@@ -2790,6 +2917,15 @@ avg_interf = interf_data.groupby('Counter3').mean()[1:]
 
         float total_x = (max_x - min_x);
         float total_y = (max_y - min_y);
+
+        if(total_x == 0.0)
+        {
+            total_x = 1.0;
+        }
+        if(total_y == 0.0)
+        {
+            total_y = 1.0;
+        }
 
         for(Eigen::Index r = 0; r <_interferometer_arr.rows()-1; r++)
         {
@@ -2817,8 +2953,8 @@ avg_interf = interf_data.groupby('Counter3').mean()[1:]
             x_idx = std::clamp(x_idx, (unsigned int)0, (disc_x-1));
             y_idx = std::clamp(y_idx, (unsigned int)0, (disc_y-1));
 
-            _x_axis[x_idx] = x_val;
-            _y_axis[y_idx] = y_val;
+            _x_axis(y_idx, x_idx) = x_val;
+            _y_axis(y_idx, x_idx) = y_val;
             
            // logI<<"  ["<<x_idx << "] : "<<"  ["<< y_idx << "]\n";
             for(auto& itr: _analyzed_counts)
@@ -3383,3 +3519,387 @@ void gen_insert_order_lists(std::vector<std::string> &element_lines, std::vector
 
 }
 
+//---------------------------------------------------------------------------
+
+void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, const QString &contrast_limits, QVector<QRgb> *selected_colormap)
+{
+    int cur = 0;
+    
+    QFileInfo finfo = QFileInfo(_filepath);
+    QDir temp_dir = finfo.absolutePath();
+    temp_dir.mkdir(finfo.baseName());
+    temp_dir.cd(finfo.baseName());
+    
+    QDir png_dir = temp_dir;
+    QDir tif8_dir = png_dir;
+    QDir tiff_dir = png_dir;
+    QDir ascii_dir = png_dir;
+
+    if (savePNG)
+    {
+        png_dir.mkdir("PNG");
+        png_dir.cd("PNG");
+    }
+    if (saveTIFF)
+    {
+        tif8_dir.mkdir("TIF_8bit");
+        tif8_dir.cd("TIF_8bit");
+        tiff_dir.mkdir("TIF_32FP");
+        tiff_dir.cd("TIF_32FP");
+    }
+
+
+    if (savePNG || saveTIFF)
+    {
+        std::vector<std::string> normalizers = { STR_DS_IC , STR_US_IC, STR_US_FM, STR_SR_CURRENT, "Counts" };
+
+        std::vector<std::string> analysis_types = getAnalyzedTypes();
+        for (auto& a_itr : _analyzed_counts)
+        {   
+            if (savePNG)
+            {
+                png_dir.mkdir(QString(a_itr.first.c_str()));
+                png_dir.cd(QString(a_itr.first.c_str()));
+            }
+            if (saveTIFF)
+            {
+                tif8_dir.mkdir(QString(a_itr.first.c_str()));
+                tif8_dir.cd(QString(a_itr.first.c_str()));
+                tiff_dir.mkdir(QString(a_itr.first.c_str()));
+                tiff_dir.cd(QString(a_itr.first.c_str()));
+            }
+            const data_struct::ArrayXXr<float>* normalizer = nullptr;
+            for (auto n_itr : normalizers)
+            {
+                tiff_dir.mkdir(QString(n_itr.c_str()));
+                tiff_dir.cd(QString(n_itr.c_str()));
+
+                const std::map<std::string, data_struct::ArrayXXr<float>>* scalers = getScalers();
+                if (scalers->count(n_itr) > 0)
+                {
+                    normalizer = &(scalers->at(n_itr));
+                }
+                else
+                {
+                    continue;
+                }
+                Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
+
+                
+                // Save 8 bit png and/or tiff
+                for (auto& e_itr : *a_itr.second)
+                {
+                    ArrayXXr<float> normalized;
+                    GenerateImageProp props;
+                    props.analysis_type = a_itr.first;
+                    props.element = e_itr.first;
+                    props.log_color = false;
+                    props.selected_colormap = selected_colormap;
+                    props.normalizer = normalizer;
+                    props.calib_curve = calib_curve;
+                    props.contrast_limits = contrast_limits;
+                    props.show_legend = false;
+                    props.invert_y = false;
+                    props.global_contrast = true;
+                    if (props.global_contrast)
+                    {
+                        props.contrast_max = 1.0;
+                        props.contrast_min =  0.0;
+                    }
+                    QPixmap pixmap = gen_pixmap(props, normalized);
+                    if (savePNG)
+                    {
+                        std::string save_file_name = a_itr.first + "-" + e_itr.first + ".png";
+                        if (false == pixmap.save(QDir::cleanPath(png_dir.absolutePath() + QDir::separator() + QString(save_file_name.c_str())), "PNG"))
+                        {
+                            logE << "Could not save PNG for " << QDir::cleanPath(png_dir.absolutePath() + QDir::separator() + QString(save_file_name.c_str())).toStdString() << "\n";
+                        }
+                    }
+                    if (saveTIFF)
+                    {
+                        std::string save_file_name = a_itr.first + "-" + e_itr.first + "_8bit.tif";
+                        if (false == pixmap.save(QDir::cleanPath(tif8_dir.absolutePath() + QDir::separator() + QString(save_file_name.c_str())), "TIFF"))
+                        {
+                            logE << "Could not save 8 bit TIFF for " << QDir::cleanPath(tif8_dir.absolutePath() + QDir::separator() + QString(save_file_name.c_str())).toStdString() << "\n";
+                        }
+                    }
+                }
+                tiff_dir.cdUp();
+            }
+            // save normalized 32 bit float tiff
+            if (saveTIFF)
+            {
+                const data_struct::ArrayXXr<float>* normalizer = nullptr;
+                for (auto n_itr : normalizers)
+                {
+                    tiff_dir.mkdir(QString(n_itr.c_str()));
+                    tiff_dir.cd(QString(n_itr.c_str()));
+
+                    const std::map<std::string, data_struct::ArrayXXr<float>>* scalers = getScalers();
+                    if (scalers->count(n_itr) > 0)
+                    {
+                        normalizer = &(scalers->at(n_itr));
+                    }
+                    Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
+
+                    for (auto& e_itr : *a_itr.second)
+                    {
+                        std::string save_file_name_fp = a_itr.first + "-" + e_itr.first + "-";
+                        TIFF* tif = nullptr;
+
+                        data_struct::ArrayXXr<float> counts = e_itr.second;
+
+                        //out_stream << e_itr.first;
+                        if (calib_curve != nullptr && normalizer != nullptr)
+                        {
+                            if (calib_curve->calib_curve.count(e_itr.first) > 0)
+                            {
+                                save_file_name_fp += n_itr;
+
+                                float calib_val = static_cast<float>(calib_curve->calib_curve.at(e_itr.first));
+
+                                counts /= (*normalizer);
+                                counts /= calib_val;
+                            }
+                            else
+                            {
+                                save_file_name_fp += "cts_s";
+                            }
+                        }
+                        else
+                        {
+                            save_file_name_fp += "cts_s";
+                        }
+
+                        save_file_name_fp += ".tif";
+
+                        QString save_path = QDir::cleanPath(tiff_dir.absolutePath() + QDir::separator() + QString(save_file_name_fp.c_str()));
+                        if ((tif = TIFFOpen(save_path.toStdString().c_str(), "w")) == NULL)
+                        {
+                            logE << "Could not open " << save_path.toStdString() << " for writing\n";
+                            continue;
+                        }
+
+                        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, e_itr.second.cols());
+                        TIFFSetField(tif, TIFFTAG_IMAGELENGTH, e_itr.second.rows());
+                        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 32);
+                        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
+                        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, e_itr.second.rows());
+                        TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+                        //TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_DEFLATE);
+                        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+                        TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+                        //TIFFSetField(tif, TIFFTAG_FILLORDER, FILLORDER_MSB2LSB);
+
+                        // Write the information to the file
+                        // need to normaize the data by IC also 
+                        TIFFWriteEncodedStrip(tif, 0, counts.data(), 4 * counts.cols() * counts.rows());
+                        TIFFClose(tif);
+                    }
+
+                    tiff_dir.cdUp();
+                }
+            }
+
+            if (savePNG)
+            {
+                png_dir.cdUp();
+            }
+            if (saveTIFF)
+            {
+                tif8_dir.cdUp();
+                tiff_dir.cdUp();
+            }
+        }
+    }
+    if (saveASCII)
+    {
+        ascii_dir.mkdir("CSV");
+        ascii_dir.cd("CSV");
+
+        std::vector<std::string> normalizers = { STR_DS_IC , STR_US_IC, STR_US_FM, STR_SR_CURRENT, "Counts" };
+
+        std::vector<std::string> analysis_types = getAnalyzedTypes();
+
+        //size_t cur = 0;
+        //size_t total = analysis_types.size() * x_axis.cols() * y_axis.rows() * normalizers.size();
+
+        for (auto& a_itr : _analyzed_counts)
+        {
+            const data_struct::ArrayXXr<float>* normalizer = nullptr;
+            QString analysis_name = QString(a_itr.first.c_str());
+            ascii_dir.mkdir(analysis_name);
+            ascii_dir.cd(analysis_name);
+
+            for (auto n_itr : normalizers)
+            {
+
+                ascii_dir.mkdir(QString(n_itr.c_str()));
+                ascii_dir.cd(QString(n_itr.c_str()));
+
+                const std::map<std::string, data_struct::ArrayXXr<float>>* scalers = getScalers();
+                if (scalers->count(n_itr) > 0)
+                {
+                    normalizer = &(scalers->at(n_itr));
+                }
+                Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
+
+                std::string save_file_name = ascii_dir.absolutePath().toStdString() + QDir::separator().toLatin1() + getDatasetName().toStdString();
+
+                std::string sub_save_file = save_file_name + "-" + a_itr.first + "-" + n_itr + ".csv";
+                std::ofstream out_stream(sub_save_file);
+
+                logI << save_file_name << "\n";
+
+                if (out_stream.is_open())
+                {
+
+                    out_stream << "ascii information for file: " << getDatasetName().toStdString() << "\n";
+
+
+
+                    if (a_itr.first == STR_FIT_ROI || n_itr == "Counts")
+                    {
+                        out_stream << "Analysis " << a_itr.first << " in cts/s \n";
+                    }
+                    else
+                    {
+                        out_stream << "Analysis " << a_itr.first << " Normalized by " << n_itr << " ug/cm2 \n";
+                    }
+
+                    out_stream << "Y Pixel, X Pixel, Y Position, X Position, ";
+                    for (auto& e_itr : *a_itr.second)
+                    {
+                        out_stream << e_itr.first;
+                        if (calib_curve != nullptr && normalizer != nullptr)
+                        {
+                            if (calib_curve->calib_curve.count(e_itr.first) > 0)
+                            {
+                                out_stream << " (ug/cm2) ";
+                            }
+                            else
+                            {
+                                out_stream << " (cts/s) ";
+                            }
+                        }
+                        else
+                        {
+                            out_stream << " (cts/s) ";
+                        }
+                        out_stream << " , ";
+                    }
+                    out_stream << "\n";
+
+                    for (int yidx = 0; yidx < _y_axis.rows(); yidx++)
+                    {
+                        for (int xidx = 0; xidx < _x_axis.cols(); xidx++)
+                        {
+
+                            out_stream << yidx << " , " << xidx << " , " << _y_axis(yidx,0) << " , " << _x_axis(0,xidx) << " , ";
+
+                            for (auto& e_itr : *a_itr.second)
+                            {
+                                float calib_val = 1.0;
+                                double val = 1.0;
+                                float e_val = (e_itr.second)(yidx, xidx);
+                                if (a_itr.first == STR_FIT_ROI || n_itr == "Counts")
+                                {
+                                    val = e_val;
+                                }
+                                else
+                                {
+                                    if (calib_curve != nullptr && normalizer != nullptr)
+                                    {
+                                        if (calib_curve->calib_curve.count(e_itr.first) > 0)
+                                        {
+                                            calib_val = static_cast<float>(calib_curve->calib_curve.at(e_itr.first));
+                                            float n_val = (*normalizer)(yidx, xidx);
+                                            val = e_val / n_val / calib_val;
+                                        }
+                                        else
+                                        {
+                                            val = e_val;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        val = e_val;
+                                    }
+                                }
+                                out_stream << val << " , ";
+                            }
+                            cur++;
+                            
+                            out_stream << "\n";
+                        }
+                        out_stream << "\n";
+                    }
+
+                    out_stream << "\n";
+                    // check if there are any ROI's and export them
+                    const std::unordered_map<std::string, Map_ROI> rois = get_map_rois();
+                    for (auto itr_roi : rois)
+                    {
+                        out_stream << "ROI: "<<itr_roi.first<<"\n";
+                        for (auto& p_itr : itr_roi.second.pixel_list)
+                        {
+                            int yidx = p_itr.second;
+                            int xidx = p_itr.first;
+                            if (yidx >= _y_axis.rows() || xidx >= _x_axis.cols()) continue;
+
+                            out_stream << yidx << " , " << xidx << " , " << _y_axis(yidx,0) << " , " << _x_axis(0,xidx) << " , ";
+
+                            for (auto& e_itr : *a_itr.second)
+                            {
+                                float calib_val = 1.0;
+                                double val = 1.0;
+                                float e_val = (e_itr.second)(yidx, xidx);
+                                if (a_itr.first == STR_FIT_ROI || n_itr == "Counts")
+                                {
+                                    val = e_val;
+                                }
+                                else
+                                {
+                                    if (calib_curve != nullptr && normalizer != nullptr)
+                                    {
+                                        if (calib_curve->calib_curve.count(e_itr.first) > 0)
+                                        {
+                                            calib_val = static_cast<float>(calib_curve->calib_curve.at(e_itr.first));
+                                            float n_val = (*normalizer)(yidx, xidx);
+                                            if(calib_val > 0.0 && n_val > 0.0)
+                                            {
+                                                val = e_val / n_val / calib_val;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            val = e_val;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        val = e_val;
+                                    }
+                                }
+                                out_stream << val << " , ";
+                            }
+                            out_stream << "\n";
+                        }    
+                        out_stream << "\n";                
+                    }
+                    out_stream.close();
+                }
+                else
+                {
+                    logE << "Could not save file for " << save_file_name << "\n";
+                }
+
+                ascii_dir.cdUp();
+            }
+            ascii_dir.cdUp();
+        }
+    }
+ 
+}
+
+//---------------------------------------------------------------------------
