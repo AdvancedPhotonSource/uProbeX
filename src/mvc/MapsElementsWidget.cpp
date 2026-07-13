@@ -41,25 +41,34 @@ MapsElementsWidget::MapsElementsWidget(int rows, int cols, bool compact_view, bo
     _calib_curve = nullptr;
 	_export_maps_dialog = nullptr;
 
-	int r = 0;
+    // Heat colormap stops: black -> dark red -> red -> light red -> yellow -> white
+    static const int heat_stops[][3] = {
+        {0, 0, 0},          // black
+        {128, 0, 0},        // dark red
+        {255, 0, 0},        // red
+        {255, 128, 128},    // light red
+        {255, 255, 0},      // yellow
+        {255, 255, 255}     // white
+    };
+    const int num_segs = (int)(sizeof(heat_stops) / sizeof(heat_stops[0])) - 1;
+
     for (int i = 0; i < 256; ++i)
     {
         _gray_colormap.append(qRgb(i, i, i));
-		if (i < 128)
-		{
-			_heat_colormap.append(qRgb(r, 0, 0));
-			r += 2;
-		}
-		else if (i == 128)
-		{
-			r = 1;
-			_heat_colormap.append(qRgb(255, r, 0));
-		}
-		else
-		{
-			_heat_colormap.append(qRgb(255, r, 0));
-			r += 2;
-		}
+
+        // Map i in [0,255] to a position along the stop list and linearly
+        // interpolate between the two surrounding stops.
+        float pos = (float)i / 255.0f * num_segs;
+        int seg = (int)pos;
+        if (seg >= num_segs)
+        {
+            seg = num_segs - 1;
+        }
+        float t = pos - seg;
+        int r = (int)(heat_stops[seg][0] + t * (heat_stops[seg + 1][0] - heat_stops[seg][0]) + 0.5f);
+        int g = (int)(heat_stops[seg][1] + t * (heat_stops[seg + 1][1] - heat_stops[seg][1]) + 0.5f);
+        int b = (int)(heat_stops[seg][2] + t * (heat_stops[seg + 1][2] - heat_stops[seg][2]) + 0.5f);
+        _heat_colormap.append(qRgb(r, g, b));
     }
 	_selected_colormap = &_gray_colormap;
 
@@ -1057,7 +1066,7 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
 
  //---------------------------------------------------------------------------
 
-void MapsElementsWidget::setModel(MapsH5Model* model)
+void MapsElementsWidget::setModel(std::shared_ptr<MapsH5Model> model)
 {
     if (_model != model)
     {
@@ -1065,115 +1074,6 @@ void MapsElementsWidget::setModel(MapsH5Model* model)
         _calib_curve = nullptr;
         _model = model;
         model_updated();
-        if (_model != nullptr)
-        {
-            data_struct::Params_Override<double>* po = _model->getParamOverride();
-            if (po != nullptr)
-            {
-                _spectra_widget->setParamOverride(po);
-            }
-            disconnect(_model, &MapsH5Model::model_int_spec_updated, _spectra_widget, &FitSpectraWidget::replot_integrated_spectra);
-            _spectra_widget->clearFitIntSpectra();
-            _spectra_widget->clearROISpectra();
-            for (auto& itr : model->_fit_int_spec_dict)
-            {
-                _spectra_widget->appendFitIntSpectra(itr.first, itr.second);
-            }
-
-            for (auto& itr : model->_max_chan_spec_dict)
-            {
-                _spectra_widget->appendMaxChanSpectra(itr.first, itr.second);
-            }
-            
-
-            if(_model->is_polar_xanes_scan() )
-            {
-                _tab_widget->setTabVisible(2, true); // set polar xanes visible
-                _tab_widget->setTabVisible(3, false); // set quantification not visible   
-                _tab_widget->setTabVisible(4, false); // set coloc not visible   
-                _tab_widget->setTabVisible(6, false); // set extra pvs not visible   
-
-                _polar_xanes_widget->setModel(_model);                
-
-                _spectra_widget->appendMaxChanSpectra(STR_LHCP_SPECTRA, _model->get_lhcp_spectra());
-                _spectra_widget->appendMaxChanSpectra(STR_RHCP_SPECTRA, _model->get_rhcp_spectra());
-
-                _model->getIntegratedSpectra(_int_spec);
-                _int_spec /= 2.0;
-			    _spectra_widget->setIntegratedSpectra(&_int_spec);
-                _tab_widget->setCurrentIndex(2);
-            }
-            else
-            {
-                _tab_widget->setTabVisible(2, false); // set polar xanes not visible
-                _tab_widget->setTabVisible(3, true); // set quantification  visible
-                _tab_widget->setTabVisible(4, true); // set coloc visible   
-                _tab_widget->setTabVisible(6, true); // set extra pvs visible   
-                _model->getIntegratedSpectra(_int_spec);
-			    _spectra_widget->setIntegratedSpectra(&_int_spec);
-            
-            }
-
-			_spectra_widget->setDatasetDir(_model->getDir());
-
-            connect(_model, &MapsH5Model::model_int_spec_updated, _spectra_widget, &FitSpectraWidget::replot_integrated_spectra);
-
-            const data_struct::Scan_Info<double>* scan_info = _model->getScanInfo();
-
-            if (scan_info != nullptr)
-            {
-                _extra_pvs_table_widget->hide();
-                _extra_pvs_table_widget->setUpdatesEnabled(false);
-                _extra_pvs_table_widget->clear();
-                _extra_pvs_table_widget->setRowCount(scan_info->extra_pvs.size());
-                int i = 0;
-                for (const auto& itr : scan_info->extra_pvs)
-                {
-                    _extra_pvs_table_widget->setItem(i, 0, new QTableWidgetItem(QString::fromLatin1(itr.name.c_str(), itr.name.length())));
-                    _extra_pvs_table_widget->setItem(i, 1, new QTableWidgetItem(QString::fromLatin1(itr.value.c_str(), itr.value.length())));
-                    _extra_pvs_table_widget->setItem(i, 2, new QTableWidgetItem(QString::fromLatin1(itr.unit.c_str(), itr.unit.length())));
-                    _extra_pvs_table_widget->setItem(i, 3, new QTableWidgetItem(QString::fromLatin1(itr.description.c_str(), itr.description.length())));
-                    i++;
-                }
-             
-                _extra_pvs_table_widget->setUpdatesEnabled(true);
-                _extra_pvs_table_widget->show();
-            }
-            // add map_roi's 
-            // clear old roi's 
-            m_roiTreeModel->clearAll();
-            _model->loadAllRoiMaps();
-            for (auto& itr : _model->get_map_rois())
-            {
-                
-                QRectF scene_dims = m_imageViewWidget->getSceneRect();
-                int width = (int)scene_dims.width();
-                int height = (int)scene_dims.height();
-                logI<< "Loading roi: "<< itr.first<<"\n";
-                gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(QString(itr.first.c_str()), itr.second.color, itr.second.color_alpha, width, height, itr.second.pixel_list);
-                insertAndSelectAnnotation(m_roiTreeModel, m_roiTreeView, m_roiSelectionModel, roi);
-                if (itr.second.int_spec.count(_model->getDatasetName().toStdString()) > 0)
-                {
-                    // plot roi int spec
-                    _spectra_widget->appendROISpectra(itr.first, (ArrayDr*)&(itr.second.int_spec.at(_model->getDatasetName().toStdString())), itr.second.color);
-                }
-            }
-
-            QString analysis_text = _cb_analysis->currentText();
-            if (analysis_text.length() > 0)
-            {
-                _co_loc_widget->onSetAnalysisType(analysis_text);
-                _scatter_plot_widget->setAnalysisType(analysis_text);
-            }
-
-            _co_loc_widget->setModel(_model);
-            _scatter_plot_widget->setModel(_model);
-            _quant_widget->setModel(_model);
-
-            _motor_trans.setMotors(_model->get_x_axis(), _model->get_y_axis());
-            
-            annoTabChanged(m_tabWidget->currentIndex());
-        }
     }
 }
 
@@ -1493,6 +1393,114 @@ void MapsElementsWidget::model_updated()
         }
     }
     m_imageWidgetToolBar->clickFill();
+
+
+    data_struct::Params_Override<double>* po = _model->getParamOverride();
+    if (po != nullptr)
+    {
+        _spectra_widget->setParamOverride(po);
+    }
+    disconnect(_model.get(), &MapsH5Model::model_int_spec_updated, _spectra_widget, &FitSpectraWidget::replot_integrated_spectra);
+    _spectra_widget->clearFitIntSpectra();
+    _spectra_widget->clearROISpectra();
+    for (auto& itr : _model->_fit_int_spec_dict)
+    {
+        _spectra_widget->appendFitIntSpectra(itr.first, itr.second);
+    }
+
+    for (auto& itr : _model->_max_chan_spec_dict)
+    {
+        _spectra_widget->appendMaxChanSpectra(itr.first, itr.second);
+    }
+    
+
+    if(_model->is_polar_xanes_scan() )
+    {
+        _tab_widget->setTabVisible(2, true); // set polar xanes visible
+        _tab_widget->setTabVisible(3, false); // set quantification not visible   
+        _tab_widget->setTabVisible(4, false); // set coloc not visible   
+        _tab_widget->setTabVisible(6, false); // set extra pvs not visible   
+
+        _polar_xanes_widget->setModel(_model);                
+
+        _spectra_widget->appendMaxChanSpectra(STR_LHCP_SPECTRA, _model->get_lhcp_spectra());
+        _spectra_widget->appendMaxChanSpectra(STR_RHCP_SPECTRA, _model->get_rhcp_spectra());
+
+        _model->getIntegratedSpectra(_int_spec);
+        _int_spec /= 2.0;
+        _spectra_widget->setIntegratedSpectra(&_int_spec);
+        _tab_widget->setCurrentIndex(2);
+    }
+    else
+    {
+        _tab_widget->setTabVisible(2, false); // set polar xanes not visible
+        _tab_widget->setTabVisible(3, true); // set quantification  visible
+        _tab_widget->setTabVisible(4, true); // set coloc visible   
+        _tab_widget->setTabVisible(6, true); // set extra pvs visible   
+        _model->getIntegratedSpectra(_int_spec);
+        _spectra_widget->setIntegratedSpectra(&_int_spec);
+    
+    }
+
+    _spectra_widget->setDatasetDir(_model->getDir());
+
+    connect(_model.get(), &MapsH5Model::model_int_spec_updated, _spectra_widget, &FitSpectraWidget::replot_integrated_spectra);
+
+    const data_struct::Scan_Info<double>* scan_info = _model->getScanInfo();
+
+    if (scan_info != nullptr)
+    {
+        _extra_pvs_table_widget->hide();
+        _extra_pvs_table_widget->setUpdatesEnabled(false);
+        _extra_pvs_table_widget->clear();
+        _extra_pvs_table_widget->setRowCount(scan_info->extra_pvs.size());
+        int i = 0;
+        for (const auto& itr : scan_info->extra_pvs)
+        {
+            _extra_pvs_table_widget->setItem(i, 0, new QTableWidgetItem(QString::fromLatin1(itr.name.c_str(), itr.name.length())));
+            _extra_pvs_table_widget->setItem(i, 1, new QTableWidgetItem(QString::fromLatin1(itr.value.c_str(), itr.value.length())));
+            _extra_pvs_table_widget->setItem(i, 2, new QTableWidgetItem(QString::fromLatin1(itr.unit.c_str(), itr.unit.length())));
+            _extra_pvs_table_widget->setItem(i, 3, new QTableWidgetItem(QString::fromLatin1(itr.description.c_str(), itr.description.length())));
+            i++;
+        }
+        
+        _extra_pvs_table_widget->setUpdatesEnabled(true);
+        _extra_pvs_table_widget->show();
+    }
+    // add map_roi's 
+    // clear old roi's 
+    m_roiTreeModel->clearAll();
+    _model->loadAllRoiMaps();
+    for (auto& itr : _model->get_map_rois())
+    {
+        
+        QRectF scene_dims = m_imageViewWidget->getSceneRect();
+        int width = (int)scene_dims.width();
+        int height = (int)scene_dims.height();
+        logI<< "Loading roi: "<< itr.first<<"\n";
+        gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(QString(itr.first.c_str()), itr.second.color, itr.second.color_alpha, width, height, itr.second.pixel_list);
+        insertAndSelectAnnotation(m_roiTreeModel, m_roiTreeView, m_roiSelectionModel, roi);
+        if (itr.second.int_spec.count(_model->getDatasetName().toStdString()) > 0)
+        {
+            // plot roi int spec
+            _spectra_widget->appendROISpectra(itr.first, (ArrayDr*)&(itr.second.int_spec.at(_model->getDatasetName().toStdString())), itr.second.color);
+        }
+    }
+
+    QString analysis_text = _cb_analysis->currentText();
+    if (analysis_text.length() > 0)
+    {
+        _co_loc_widget->onSetAnalysisType(analysis_text);
+        _scatter_plot_widget->setAnalysisType(analysis_text);
+    }
+
+    _co_loc_widget->setModel(_model);
+    _scatter_plot_widget->setModel(_model);
+    _quant_widget->setModel(_model);
+
+    _motor_trans.setMotors(_model->get_x_axis(), _model->get_y_axis());
+    
+    annoTabChanged(m_tabWidget->currentIndex());
 
     redrawCounts();
     connect(_cb_normalize, &QComboBox::currentTextChanged, this, &MapsElementsWidget::onSelectNormalizer);

@@ -144,10 +144,6 @@ MapsWorkspaceModel::MapsWorkspaceModel() : QObject()
 
 MapsWorkspaceModel::~MapsWorkspaceModel()
 {
-	for (auto & itr : _h5_models)
-	{
-		delete itr.second;
-	}
 	_h5_models.clear();
 
 	for (auto & itr : _raw_models)
@@ -318,10 +314,6 @@ void MapsWorkspaceModel::reload_region_link()
 void MapsWorkspaceModel::unload()
 {
 
-    for(auto &itr : _h5_models)
-    {
-        delete itr.second;
-    }
     _h5_models.clear();
 
     for(auto &itr : _raw_models)
@@ -354,7 +346,7 @@ void MapsWorkspaceModel::unload()
 
 //---------------------------------------------------------------------------
 
-void MapsWorkspaceModel::_load_region_links(QString name, MapsH5Model* model)
+void MapsWorkspaceModel::_load_region_links(QString name, std::shared_ptr<MapsH5Model> model)
 {
     for (auto& itr : _region_links_fileinfo_list)
     {
@@ -380,7 +372,7 @@ void MapsWorkspaceModel::_load_region_links(QString name, MapsH5Model* model)
 
 //---------------------------------------------------------------------------
 
-MapsH5Model* MapsWorkspaceModel::get_MapsH5_Model(QString name)
+std::shared_ptr<MapsH5Model> MapsWorkspaceModel::get_MapsH5_Model(QString name)
 {
     if(_h5_models.count(name) > 0)
     {
@@ -388,7 +380,7 @@ MapsH5Model* MapsWorkspaceModel::get_MapsH5_Model(QString name)
     }
     if(_h5_fileinfo_list.count(name) > 0)
     {
-        MapsH5Model * model = new MapsH5Model();
+        std::shared_ptr<MapsH5Model> model = std::make_shared<MapsH5Model>();
         QFileInfo fileInfo = _h5_fileinfo_list[name];
         if (model->load(fileInfo.absoluteFilePath()))
         {
@@ -574,9 +566,7 @@ void MapsWorkspaceModel::unload_H5_Model(QString name)
 {
     if(_h5_models.count(name) > 0)
     {
-        MapsH5Model* model = _h5_models[name];
         _h5_models.erase(name);
-        delete model;
     }
 }
 
@@ -584,10 +574,6 @@ void MapsWorkspaceModel::unload_H5_Model(QString name)
 
 void MapsWorkspaceModel::unload_all_H5_Model()
 {
-    for(auto &itr : _h5_models)
-    {
-        delete itr.second;
-    }
     _h5_models.clear();
 }
 
@@ -657,7 +643,7 @@ bool MapsWorkspaceModel::_load_fit_params()
     for(size_t detector_num = 0; detector_num <= MAX_DETECTORS; detector_num++)
     {
         data_struct::Params_Override<double> params_override(dataset_dir, detector_num);
-        if( io::file::load_override_params(dataset_dir, detector_num, params_override) )
+        if( io::file::load_override_params(dataset_dir, detector_num, params_override, true, false) )
         {
             _fit_params_override_dict[detector_num] = params_override;
             emit newFitParamsFileLoaded(detector_num);
