@@ -41,12 +41,11 @@ MapsElementsWidget::MapsElementsWidget(int rows, int cols, bool compact_view, bo
     _calib_curve = nullptr;
 	_export_maps_dialog = nullptr;
 
-    // Heat colormap stops: black -> dark red -> red -> light red -> yellow -> white
+    // Heat colormap stops: black -> red -> orange -> yellow -> white
     static const int heat_stops[][3] = {
         {0, 0, 0},          // black
-        {128, 0, 0},        // dark red
         {255, 0, 0},        // red
-        {255, 128, 128},    // light red
+        {255, 165, 0},      // orange
         {255, 255, 0},      // yellow
         {255, 255, 255}     // white
     };
@@ -200,6 +199,12 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     _chk_invert_y->setChecked(Preferences::inst()->getValue(STR_INVERT_Y_AXIS).toBool());
     connect(_chk_invert_y, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_invert_y_axis);
 
+
+    _chk_show_scalebar = new QCheckBox("Show Scalebar");
+    _chk_show_scalebar->setChecked(Preferences::inst()->getValue(STR_PRF_ScaleBarVisible).toBool());
+    connect(_chk_show_scalebar, &QCheckBox::stateChanged, m_imageViewWidget, &ImageViewWidget::setScaleBarVisible);
+
+    
     _grid_button = new QPushButton();
 	_grid_button->setIcon(QIcon(":/images/grid.png"));
 	_grid_button->setIconSize(QSize(15, 15)); 
@@ -217,6 +222,7 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     QHBoxLayout* optionsHboxM = new QHBoxLayout();
     optionsHboxM->setContentsMargins(0, 0, 0, 0);
     optionsHBox->addWidget(_chk_invert_y);
+    optionsHBox->addWidget(_chk_show_scalebar);
     optionsHboxS->addWidget(new QLabel("Layout:"));
     optionsHboxS->addWidget(_grid_button);
     optionsHboxS->addWidget(_btn_export_as_image);
@@ -883,7 +889,7 @@ void MapsElementsWidget::onElementSelect(QString name, int viewIdx)
                 m_imageViewWidget->setUnitLabel(i, "ug/cm2");
             }
         }
-        if(label == STR_ELT || label == STR_ERT)
+        if(label.toStdString() == STR_ELT || label.toStdString() == STR_ERT)
         {
             m_imageViewWidget->setUnitLabel(i, "secs");
         }
@@ -1002,7 +1008,7 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
         for (int i = 0; i < cnt; i++)
         {
             QString label = m_imageViewWidget->getLabelAt(i);
-            if (label == STR_ELT || label == STR_ERT)
+            if (label.toStdString() == STR_ELT || label.toStdString() == STR_ERT)
             {
                 m_imageViewWidget->setUnitLabel(i,"secs");
             }
@@ -1035,7 +1041,7 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
             {
                 m_imageViewWidget->setUnitLabel(i, "ug/cm2");
             }
-            else if (label == STR_ELT || label == STR_ERT)
+            else if (label.toStdString() == STR_ELT || label.toStdString() == STR_ERT)
             {
                 m_imageViewWidget->setUnitLabels("secs");
             }
@@ -1048,7 +1054,7 @@ void MapsElementsWidget::onSelectNormalizer(QString name)
         for (int i = 0; i < cnt; i++)
         {
             QString label = m_imageViewWidget->getLabelAt(i);
-            if (label == STR_ELT || label == STR_ERT)
+            if (label.toStdString() == STR_ELT || label.toStdString() == STR_ERT)
             {
                 m_imageViewWidget->setUnitLabel(i,"secs");
             }

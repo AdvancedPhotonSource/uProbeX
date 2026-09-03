@@ -153,6 +153,7 @@ void uProbeX::check_and_set_default_pref()
     Preferences::inst()->checkAndSet(STR_PFR_SHOW_SCAN_QUEUE_HEADER, QVariant(true));
     Preferences::inst()->checkAndSet(STR_PFR_LOG_10, QVariant(true));
     Preferences::inst()->checkAndSet(STR_PFR_SHOW_SCAN_QUEUE_HEADER, QVariant(true));
+    Preferences::inst()->checkAndSet(STR_PRF_ScaleBarVisible, QVariant(true));
     
 }
 
@@ -893,7 +894,7 @@ void uProbeX::open_HDF_File()
 
     QString fileName = QFileDialog::getOpenFileName(this,
                                                     "Open HDF5", ".",
-                                                    tr("H5 (*.h5 *.h5*)", nullptr, FILE_DIALOG_OPTIONS));
+                                                    "H5 (*.h5 *.h5*)", nullptr, FILE_DIALOG_OPTIONS);
 
     // Dialog returns a nullptr string if user press cancel.
     if (fileName.isNull() || fileName.isEmpty()) return;
