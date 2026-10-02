@@ -42,7 +42,6 @@ FitSpectraWidget::FitSpectraWidget(QWidget* parent) : QWidget(parent)
     _int_spec = nullptr;
     _displayROIs = true;
     _elements_to_fit = nullptr;
-    _fitting_dialog = nullptr;
 	_param_override = nullptr;
     _fit_spec.setZero(2048);
     _showDetailedFitSpec = Preferences::inst()->getValue(STR_PFR_DETAILED_FIT_SPEC).toBool();
@@ -108,16 +107,6 @@ FitSpectraWidget::FitSpectraWidget(QWidget* parent) : QWidget(parent)
 
 FitSpectraWidget::~FitSpectraWidget()
 {
-    if(_periodic_table_widget != nullptr)
-    {
-        delete _periodic_table_widget;
-    }
-
-    if (_fitting_dialog != nullptr)
-    {
-        delete _fitting_dialog;
-        _fitting_dialog = nullptr;
-    }
 }
 
 //---------------------------------------------------------------------------
@@ -136,18 +125,18 @@ void FitSpectraWidget::createLayout()
 
     fitting::models::Gaussian_Model<double> g_model;
 
-    _fit_params_table_model = new FitParamsTableModel();
+    _fit_params_table_model = std::make_unique<FitParamsTableModel>();
     _fit_params_table_model->setFitParams(g_model.fit_parameters());
     _fit_params_table_model->setOptimizerSupportsMinMax(true);
-    connect(_fit_params_table_model, &FitParamsTableModel::onEnergyChange, this, &FitSpectraWidget::replot_integrated_spectra_with_background);
+    connect(_fit_params_table_model.get(), &FitParamsTableModel::onEnergyChange, this, &FitSpectraWidget::replot_integrated_spectra_with_background);
     ComboBoxDelegate *cbDelegate = new ComboBoxDelegate(bound_types);
     NumericPrecDelegate* npDelegate = new NumericPrecDelegate();
 
-    _periodic_table_widget = new PeriodicTableWidget();
-    connect(_periodic_table_widget, &PeriodicTableWidget::onSelect, this, &FitSpectraWidget::update_selected_element_to_add);
+    _periodic_table_widget = std::make_unique<PeriodicTableWidget>();
+    connect(_periodic_table_widget.get(), &PeriodicTableWidget::onSelect, this, &FitSpectraWidget::update_selected_element_to_add);
 
     _fit_params_table = new QTableView();
-    _fit_params_table->setModel(_fit_params_table_model);
+    _fit_params_table->setModel(_fit_params_table_model.get());
     _fit_params_table->sortByColumn(0, Qt::AscendingOrder);
     _fit_params_table->setItemDelegateForColumn(1, npDelegate);
     _fit_params_table->setItemDelegateForColumn(2, cbDelegate);
@@ -158,15 +147,15 @@ void FitSpectraWidget::createLayout()
     _fit_params_table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(_fit_params_table, &QTableView::customContextMenuRequested,this,&FitSpectraWidget::fit_params_customMenuRequested);
 
-    _fit_elements_table_model = new FitElementsTableModel(_detector_element);
+    _fit_elements_table_model = std::make_unique<FitElementsTableModel>(_detector_element);
     //_fit_elements_table_model->setDisplayHeaderMinMax(true);
 
-    connect(_spectra_widget, &SpectraWidget::y_axis_changed, _fit_elements_table_model, &FitElementsTableModel::update_counts_log10);
-    connect(_fit_elements_table_model, &FitElementsTableModel::braching_ratio_changed, this, &FitSpectraWidget::on_braching_ratio_update);
-    connect(_fit_elements_table_model, &FitElementsTableModel::width_multi_changed, this, &FitSpectraWidget::on_width_multi_changed);
+    connect(_spectra_widget, &SpectraWidget::y_axis_changed, _fit_elements_table_model.get(), &FitElementsTableModel::update_counts_log10);
+    connect(_fit_elements_table_model.get(), &FitElementsTableModel::braching_ratio_changed, this, &FitSpectraWidget::on_braching_ratio_update);
+    connect(_fit_elements_table_model.get(), &FitElementsTableModel::width_multi_changed, this, &FitSpectraWidget::on_width_multi_changed);
 
     _fit_elements_table = new QTreeView();
-    _fit_elements_table->setModel(_fit_elements_table_model);
+    _fit_elements_table->setModel(_fit_elements_table_model.get());
     _fit_elements_table->setItemDelegateForColumn(1, npDelegate);
     _fit_elements_table->sortByColumn(0, Qt::AscendingOrder);
     //_fit_elements_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
@@ -411,13 +400,13 @@ void FitSpectraWidget::onSettingsDialog()
             if (_fit_int_spec_map.count(STR_FIT_GAUSS_MATRIX) > 0)
             {
                 QString name = "Fitted_Int_" + QString(STR_FIT_GAUSS_MATRIX.c_str());
-                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_GAUSS_MATRIX), (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_GAUSS_MATRIX).get(), (data_struct::Spectra<double>*) & _ev);
             }
 
             if (_fit_int_spec_map.count("Background") > 0)
             {
                 QString name = "Fitted_Int_" + QString(STR_FIT_INT_BACKGROUND.c_str());
-                _spectra_widget->append_spectra(name, _fit_int_spec_map.at("Background"), (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(name, _fit_int_spec_map.at("Background").get(), (data_struct::Spectra<double>*) & _ev);
             }
 		}
 		else
@@ -434,7 +423,7 @@ void FitSpectraWidget::onSettingsDialog()
             if (_fit_int_spec_map.count(STR_FIT_NNLS) > 0)
             {
                 QString name = "Fitted_Int_" + QString(STR_FIT_NNLS.c_str());
-                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_NNLS), (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_NNLS).get(), (data_struct::Spectra<double>*) & _ev);
             }
         }
         else
@@ -448,7 +437,7 @@ void FitSpectraWidget::onSettingsDialog()
         {
             for (auto& itr : _max_chan_spec_map)
             {
-                _spectra_widget->append_spectra(QString(itr.first.c_str()), itr.second, (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(QString(itr.first.c_str()), itr.second.get(), (data_struct::Spectra<double>*) & _ev);
             }
         }
         else
@@ -678,7 +667,7 @@ void FitSpectraWidget::replot_integrated_spectra(bool snipback)
             if (_fit_int_spec_map.count(STR_FIT_GAUSS_MATRIX) > 0)
             {
                 QString name = "Fitted_Int_" + QString(STR_FIT_GAUSS_MATRIX.c_str());
-                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_GAUSS_MATRIX), (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_GAUSS_MATRIX).get(), (data_struct::Spectra<double>*) & _ev);
             }
         }
         else
@@ -693,7 +682,7 @@ void FitSpectraWidget::replot_integrated_spectra(bool snipback)
             if (_fit_int_spec_map.count(STR_FIT_NNLS) > 0)
             {
                 QString name = "Fitted_Int_" + QString(STR_FIT_NNLS.c_str());
-                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_NNLS), (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(name, _fit_int_spec_map.at(STR_FIT_NNLS).get(), (data_struct::Spectra<double>*) & _ev);
             }
         }
         else
@@ -707,7 +696,7 @@ void FitSpectraWidget::replot_integrated_spectra(bool snipback)
         {
             for (auto& itr : _max_chan_spec_map)
             {
-                _spectra_widget->append_spectra(QString(itr.first.c_str()), itr.second, (data_struct::Spectra<double>*) & _ev);
+                _spectra_widget->append_spectra(QString(itr.first.c_str()), itr.second.get(), (data_struct::Spectra<double>*) & _ev);
             }
         }
 
@@ -716,7 +705,7 @@ void FitSpectraWidget::replot_integrated_spectra(bool snipback)
             for (auto& itr : _roi_spec_map)
             {
                 QColor* color = &(_roi_spec_colors.at(itr.first));
-                _spectra_widget->append_spectra(QString(itr.first.c_str()), itr.second, (data_struct::Spectra<double>*) & _ev, color);
+                _spectra_widget->append_spectra(QString(itr.first.c_str()), itr.second.get(), (data_struct::Spectra<double>*) & _ev, color);
             }
         }
     }
@@ -724,21 +713,21 @@ void FitSpectraWidget::replot_integrated_spectra(bool snipback)
 
 //---------------------------------------------------------------------------
 
-void FitSpectraWidget::appendFitIntSpectra(std::string name, ArrayDr* spec)
+void FitSpectraWidget::appendFitIntSpectra(std::string name, std::shared_ptr<ArrayDr> spec)
 {
     _fit_int_spec_map[name] = spec;
 }
 
 //---------------------------------------------------------------------------
 
-void FitSpectraWidget::appendMaxChanSpectra(std::string name, const ArrayDr* spec)
+void FitSpectraWidget::appendMaxChanSpectra(std::string name, std::shared_ptr<const ArrayDr> spec)
 {
     _max_chan_spec_map[name] = spec;
 }
 
 //---------------------------------------------------------------------------
 
-void FitSpectraWidget::appendROISpectra(std::string name, ArrayDr* spec, QColor color)
+void FitSpectraWidget::appendROISpectra(std::string name, std::shared_ptr<ArrayDr> spec, QColor color)
 {
     _roi_spec_map[name] = spec;
     _roi_spec_colors[name] = color;
@@ -750,11 +739,10 @@ void FitSpectraWidget::deleteROISpectra(std::string name)
 {
     if (_roi_spec_map.count(name) > 0)
     {
-        ArrayDr* spec = _roi_spec_map.at(name);
+        auto spec = _roi_spec_map.at(name);
         if (spec != nullptr)
         {
             spec->resize(1);
-            // delete spec; throws exception , need to investigate TODO
         }
         _roi_spec_map.erase(name);
         _spectra_widget->remove_spectra(QString(name.c_str()));
@@ -768,12 +756,11 @@ void FitSpectraWidget::deleteAllROISpectra()
 {
     for (auto &itr : _roi_spec_map)
     {
-        ArrayDr* spec = itr.second;
+        auto spec = itr.second;
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
         if (spec != nullptr)
         {
             spec->resize(1);
-            // delete spec; throws exception , need to investigate TODO
         }
     }
     _roi_spec_map.clear();
@@ -837,7 +824,8 @@ void FitSpectraWidget::add_element()
 {
     if(_elements_to_fit == nullptr)
     {
-        _elements_to_fit = new data_struct::Fit_Element_Map_Dict<double>();
+        _owned_elements_to_fit = std::make_unique<data_struct::Fit_Element_Map_Dict<double>>();
+        _elements_to_fit = _owned_elements_to_fit.get();
     }
 
     QString el_name = _cb_add_elements->currentText();
@@ -906,13 +894,28 @@ void FitSpectraWidget::del_element()
             bool is_parent = false;
             _fit_elements_table_model->getElementByIndex(i, &fit_element, out_name, is_parent);
 
-            if( fit_element != nullptr && _elements_to_fit->find(fit_element->full_name()) != _elements_to_fit->end() )
+            if( fit_element != nullptr )
             {
-                Fit_Element_Map<double>* el = (*_elements_to_fit)[fit_element->full_name()];
-				_elements_to_fit->erase(fit_element->full_name());
-                if(el != nullptr)
+                bool freed = false;
+                if( _elements_to_fit != nullptr && _elements_to_fit->find(fit_element->full_name()) != _elements_to_fit->end() )
                 {
-                    delete el;
+                    Fit_Element_Map<double>* el = (*_elements_to_fit)[fit_element->full_name()];
+                    _elements_to_fit->erase(fit_element->full_name());
+                    if(el != nullptr)
+                    {
+                        delete el;
+                        freed = true;
+                    }
+                }
+                if(!freed)
+                {
+                    // not in _elements_to_fit -- may be a custom peak we own directly
+                    auto it = std::find_if(_custom_peaks.begin(), _custom_peaks.end(),
+                        [fit_element](const std::unique_ptr<data_struct::Fit_Element_Map<double>>& p) { return p.get() == fit_element; });
+                    if(it != _custom_peaks.end())
+                    {
+                        _custom_peaks.erase(it);
+                    }
                 }
             }
 			_spectra_widget->set_element_lines(nullptr);
@@ -944,8 +947,9 @@ void FitSpectraWidget::add_custom_peak_pressed()
     {
         QString name = _custon_peak_dialog.get_name();
         double center = _custon_peak_dialog.get_energy();
-        data_struct::Fit_Element_Map<double>* fit_element = new data_struct::Fit_Element_Map<double>(name.toStdString(), center, 1.0);
-        _fit_elements_table_model->appendElement(fit_element);
+        auto fit_element = std::make_unique<data_struct::Fit_Element_Map<double>>(name.toStdString(), center, 1.0);
+        _fit_elements_table_model->appendElement(fit_element.get());
+        _custom_peaks.push_back(std::move(fit_element));
     }
 }
 
@@ -984,7 +988,7 @@ void FitSpectraWidget::Fit_Spectra_Click()
 
         if (_fitting_dialog == nullptr)
         {
-            _fitting_dialog = new FittingDialog();
+            _fitting_dialog = std::make_unique<FittingDialog>();
         }
         _fitting_dialog->updateFitParams(out_fit_params, element_fit_params);
        // _fitting_dialog->setOptimizer(_cb_opttimizer->currentText());
@@ -1003,9 +1007,9 @@ void FitSpectraWidget::Fit_Spectra_Click()
         if (_fitting_dialog->accepted_fit())
         {
 
-            disconnect(_fit_params_table_model,&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+            disconnect(_fit_params_table_model.get(),&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
 
-            disconnect(_fit_elements_table_model,&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+            disconnect(_fit_elements_table_model.get(),&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
 
             //_fit_params_table_model->updateFitParams(&out_fit_params);
 
@@ -1018,8 +1022,8 @@ void FitSpectraWidget::Fit_Spectra_Click()
 
             if (_chk_auto_model->checkState() == Qt::Checked)
             {
-                connect(_fit_params_table_model,&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
-                connect(_fit_elements_table_model,&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+                connect(_fit_params_table_model.get(),&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+                connect(_fit_elements_table_model.get(),&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
 
                 Model_Spectra_Click();
             }
@@ -1062,8 +1066,7 @@ void FitSpectraWidget::Fit_Spectra_Click()
         }
 
         _fitting_dialog->waitToFinishRunning();
-        delete _fitting_dialog;
-        _fitting_dialog = nullptr;
+        _fitting_dialog.reset();
     }
 
 }
@@ -1102,7 +1105,7 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
     
     if (_roi_spec_map.count(roi_name.toStdString()) > 0)
     {
-        roi_spec = _roi_spec_map.at(roi_name.toStdString());
+        roi_spec = _roi_spec_map.at(roi_name.toStdString()).get();
     }
     else
     {
@@ -1117,7 +1120,7 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
     {
         if (_roi_spec_map.count(back_name.toStdString()) > 0)
         {
-            back_spec = _roi_spec_map.at(back_name.toStdString());
+            back_spec = _roi_spec_map.at(back_name.toStdString()).get();
         }
         else
         {
@@ -1135,7 +1138,7 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
 
         if (_fitting_dialog == nullptr)
         {
-            _fitting_dialog = new FittingDialog();
+            _fitting_dialog = std::make_unique<FittingDialog>();
         }
         _fitting_dialog->updateFitParams(out_fit_params, element_fit_params);
         //_fitting_dialog->setOptimizer(_cb_opttimizer->currentText());
@@ -1191,8 +1194,7 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
             }
         }
 
-        delete _fitting_dialog;
-        _fitting_dialog = nullptr;
+        _fitting_dialog.reset();
     }
 }
 
@@ -1281,14 +1283,14 @@ void FitSpectraWidget::check_auto_model(int state)
     {
         _btn_model_spectra->setEnabled(false);
         Model_Spectra_Click();
-        connect(_fit_params_table_model,&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
-        connect(_fit_elements_table_model,&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+        connect(_fit_params_table_model.get(),&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+        connect(_fit_elements_table_model.get(),&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
     }
     else
     {
         _btn_model_spectra->setEnabled(true);
-        disconnect(_fit_params_table_model,&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
-        disconnect(_fit_elements_table_model,&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+        disconnect(_fit_params_table_model.get(),&FitParamsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
+        disconnect(_fit_elements_table_model.get(),&FitElementsTableModel::dataChanged,this,&FitSpectraWidget::Model_Spectra_Val_Change);
     }
 }
 
@@ -1401,6 +1403,7 @@ void FitSpectraWidget::setFitParams(data_struct::Fit_Parameters<double>* fit_par
 
 void FitSpectraWidget::setElementsToFit(data_struct::Fit_Element_Map_Dict<double>* elements_to_fit)
 {
+    _owned_elements_to_fit.reset();
     _fit_elements_table_model->updateFitElements(elements_to_fit);
 	_elements_to_fit = elements_to_fit;
     update_spectra_top_axis();

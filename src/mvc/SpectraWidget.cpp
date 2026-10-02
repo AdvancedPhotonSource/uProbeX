@@ -28,6 +28,7 @@ SpectraWidget::SpectraWidget(QWidget* parent) : QWidget(parent)
     _currentYAxis = nullptr;
     _int_spec_max_x = 1;
     _int_spec_max_y = 1;
+    _contextMenu = new QMenu(this);
     createLayout();
     
     connect(this, &SpectraWidget::trigger_connect_markers, this, &SpectraWidget::connectMarkers);
@@ -417,10 +418,15 @@ void SpectraWidget::append_spectra(QString name, const data_struct::ArrayTr<doub
 
 void SpectraWidget::clearAllSpectra()
 {
-    for (auto& itr : _chart->series())
+    const QList<QAbstractSeries*> series = _chart->series();
+    for (auto* itr : series)
     {
         _chart->removeSeries(itr);
+        delete itr;
     }
+    // _line_series and every entry in _element_lines live in _chart too and were just deleted above.
+    _line_series = nullptr;
+    _element_lines.clear();
 }
 
 //---------------------------------------------------------------------------

@@ -10,6 +10,7 @@
 
 
 #include <QWidget>
+#include <memory>
 #include <QTableView>
 #include <QComboBox>
 #include <QTreeView>
@@ -17,6 +18,7 @@
 #include <QDockWidget>
 #include <QCheckBox>
 #include <algorithm>
+#include <vector>
 #include <mvc/MapsH5Model.h>
 #include <mvc/SpectraWidget.h>
 #include "mvc/FitParamsTableModel.h"
@@ -66,11 +68,11 @@ public:
 
    void clearAllSpectra() { _spectra_widget->clearAllSpectra(); }
 
-   void appendFitIntSpectra(std::string, ArrayDr*);
+   void appendFitIntSpectra(std::string, std::shared_ptr<ArrayDr>);
 
-   void appendMaxChanSpectra(std::string name, const ArrayDr* spec);
+   void appendMaxChanSpectra(std::string name, std::shared_ptr<const ArrayDr> spec);
 
-   void appendROISpectra(std::string name, ArrayDr* spec, QColor color);
+   void appendROISpectra(std::string name, std::shared_ptr<ArrayDr> spec, QColor color);
 
    void deleteROISpectra(std::string name);
 
@@ -143,11 +145,18 @@ protected:
 
    QDockWidget* _spectra_dock;
    
-   FitParamsTableModel* _fit_params_table_model;
+   std::unique_ptr<FitParamsTableModel> _fit_params_table_model;
 
-   FitElementsTableModel* _fit_elements_table_model;
+   std::unique_ptr<FitElementsTableModel> _fit_elements_table_model;
 
    data_struct::Fit_Element_Map_Dict<double>* _elements_to_fit;
+
+   // Owns the dict only when no external Params_Override supplied one via setElementsToFit();
+   // _elements_to_fit is a non-owning alias into whichever of the two is currently active.
+   std::unique_ptr<data_struct::Fit_Element_Map_Dict<double>> _owned_elements_to_fit;
+
+   // Owns peaks added via add_custom_peak_pressed(); freed on removal in del_element() or on destruction.
+   std::vector<std::unique_ptr<data_struct::Fit_Element_Map<double>>> _custom_peaks;
 
    //MapsH5Model* _h5_model;
 
@@ -155,7 +164,7 @@ protected:
 
    QTreeView* _fit_elements_table;
 
-   FittingDialog* _fitting_dialog;
+   std::unique_ptr<FittingDialog> _fitting_dialog;
 
    /**
     * @brief Create layout
@@ -226,11 +235,11 @@ private:
 
    data_struct::Params_Override<double>* _param_override;
 
-   std::unordered_map<std::string, ArrayDr*> _fit_int_spec_map;
+   std::unordered_map<std::string, std::shared_ptr<ArrayDr>> _fit_int_spec_map;
 
-   std::unordered_map<std::string, const ArrayDr*> _max_chan_spec_map;
+   std::unordered_map<std::string, std::shared_ptr<const ArrayDr>> _max_chan_spec_map;
 
-   std::map<std::string, ArrayDr*> _roi_spec_map;
+   std::map<std::string, std::shared_ptr<ArrayDr>> _roi_spec_map;
 
    std::unordered_map<std::string, QColor> _roi_spec_colors;
 
@@ -268,7 +277,7 @@ private:
 
    QPushButton* _btn_element_info;
 
-   PeriodicTableWidget* _periodic_table_widget;
+   std::unique_ptr<PeriodicTableWidget> _periodic_table_widget;
 
    ElementInfoDialog _element_info_dialog;
 

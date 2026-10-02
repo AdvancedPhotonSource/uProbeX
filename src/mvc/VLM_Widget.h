@@ -8,6 +8,7 @@
 
 //---------------------------------------------------------------------------
 
+#include <memory>
 #include <gstar/AbstractImageWidget.h>
 #include <QApplication>
 #include <gstar/AnnotationTreeModel.h>
@@ -630,17 +631,17 @@ private:
    /**
     * @brief m_coordTransformer
     */
-   Solver* m_solver;
+   std::unique_ptr<Solver> m_solver;
 
    /**
     * @brief m_solverParameterParse
     */
-   SolverParameterParse* m_solverParameterParse;
+   std::unique_ptr<SolverParameterParse> m_solverParameterParse;
 
    /**
     * @brief m_lightToMicroCoordModel
     */
-   gstar::CoordinateModel* m_lightToMicroCoordModel;
+   std::unique_ptr<gstar::CoordinateModel> m_lightToMicroCoordModel;
 
    /**
     * @brief m_lightToMicroCoordWidget
@@ -670,7 +671,7 @@ private:
    /**
     * @brief m_solverWidget
     */
-   SolverWidget* m_solverWidget;
+   std::unique_ptr<SolverWidget> m_solverWidget;
 
    /**
     * @brief m_pathFile
@@ -685,15 +686,15 @@ private:
    /**
     * @brief m_actionMap
     */
-   QMap<QAction*, RegionCaller*> m_actionMap;
+   QMap<QAction*, std::shared_ptr<RegionCaller>> m_actionMap;
 
    std::map<QString, BlueskyPlan> *_avail_scans;
 
-   ScanRegionLinkDialog* _scan_region_link_dialog;
+   std::unique_ptr<ScanRegionLinkDialog> _scan_region_link_dialog;
 
    ScanRegionDialog* _scan_dialog;
 
-   MapsH5Model *_live_h5model;
+   std::unique_ptr<MapsH5Model> _live_h5model;
 
 };
 

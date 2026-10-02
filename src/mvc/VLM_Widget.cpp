@@ -101,22 +101,6 @@ VLM_Widget::~VLM_Widget()
 
    saveScanRegionLinksDefault();
 
-    if (_scan_region_link_dialog != nullptr)
-    {
-        delete _scan_region_link_dialog;
-    }
-
-   if(m_solverParameterParse != nullptr)
-   {
-      delete m_solverParameterParse;
-   }
-   m_solverParameterParse = nullptr;
-
-   if(m_solverWidget != nullptr)
-   {
-      delete m_solverWidget;
-   }
-   m_solverWidget = nullptr;
 /*
    if (m_pvXHandler != nullptr)
       delete m_pvXHandler;
@@ -142,14 +126,11 @@ void VLM_Widget::_init()
    m_microProbePvSet = false;
 //   m_pvXHandler = nullptr;
 //   m_pvYHandler = nullptr;
-   m_solverWidget = nullptr;
    m_calSelectionModel = nullptr;
-   m_lightToMicroCoordModel = nullptr;
    m_coordinateModel = nullptr;
-   m_solver = nullptr;
    _btnSetBackground = nullptr;
-   _scan_region_link_dialog = new ScanRegionLinkDialog();
-   m_solverParameterParse = new SolverParameterParse();
+   _scan_region_link_dialog = std::make_unique<ScanRegionLinkDialog>();
+   m_solverParameterParse = std::make_unique<SolverParameterParse>();
 
    checkMicroProbePVs();
    createLayout();
@@ -169,7 +150,7 @@ void VLM_Widget::addCalibration()
 
    UProbeMarkerGraphicsItem* annotation = new UProbeMarkerGraphicsItem();
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_calTreeModel,
                              m_calAnnoTreeView,
@@ -204,7 +185,7 @@ void VLM_Widget::addTopWindowPoints()
    //Add A
    UProbeMarkerGraphicsItem* annotation = new UProbeMarkerGraphicsItem();
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_calTreeModel,
                              m_calAnnoTreeView,
@@ -217,7 +198,7 @@ void VLM_Widget::addTopWindowPoints()
    //Add B
    annotation = new UProbeMarkerGraphicsItem();
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_calTreeModel,
                              m_calAnnoTreeView,
@@ -230,7 +211,7 @@ void VLM_Widget::addTopWindowPoints()
    //Add C
    annotation = new UProbeMarkerGraphicsItem();
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_calTreeModel,
                              m_calAnnoTreeView,
@@ -243,7 +224,7 @@ void VLM_Widget::addTopWindowPoints()
    //Add D
    annotation = new UProbeMarkerGraphicsItem();
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_calTreeModel,
                              m_calAnnoTreeView,
@@ -282,7 +263,7 @@ void VLM_Widget::onAddMicroProbeRegion()
    connect(annotation, &ScanRegionGraphicsItem::planRemoved, this, &VLM_Widget::onScanRemoved);
    //UProbeRegionGraphicsItem* annotation = new UProbeRegionGraphicsItem();
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_mpTreeModel,
                              m_mpAnnoTreeView,
@@ -298,7 +279,7 @@ void VLM_Widget::onAddMicroProbeRegion()
 void VLM_Widget::addMicroProbeRegion(gstar::UProbeRegionGraphicsItem* annotation)
 {
    annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+   annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
    insertAndSelectAnnotation(m_mpTreeModel,
                              m_mpAnnoTreeView,
@@ -390,7 +371,7 @@ void VLM_Widget::_createLightToMicroCoords(int id)
       }
       else
       {
-         m_lightToMicroCoordModel = new gstar::CoordinateModel(lightTransformer);
+         m_lightToMicroCoordModel = std::make_unique<gstar::CoordinateModel>(lightTransformer);
       }
    }
    else
@@ -399,7 +380,7 @@ void VLM_Widget::_createLightToMicroCoords(int id)
       logW << "Could not init Transformer\n";
    }
 
-   m_lightToMicroCoordWidget->setModel(m_lightToMicroCoordModel);
+   m_lightToMicroCoordWidget->setModel(m_lightToMicroCoordModel.get());
 
 }
 
@@ -412,7 +393,7 @@ void VLM_Widget::_createSolver()
 
     if (m_solver == nullptr)
     {
-        m_solver = new Solver();
+        m_solver = std::make_unique<Solver>();
     }
 
     int id = Preferences::inst()->getValue(STR_PRF_SolverCheckedID).toInt();
@@ -1085,7 +1066,7 @@ void VLM_Widget::cancelUpdatedSolverVariables()
 void VLM_Widget::createCalibrationTab()
 {
 
-   m_calTreeModel = new gstar::AnnotationTreeModel();
+   m_calTreeModel = new gstar::AnnotationTreeModel(this);
 
    connect(m_calTreeModel, &gstar::AnnotationTreeModel::dataChanged, this, &VLM_Widget::calModelDataChanged);
 
@@ -1164,7 +1145,7 @@ void VLM_Widget::CallPythonFunc()
 {
 
    QAction *action = (QAction *)sender();
-   RegionCaller *prc = m_actionMap[action];
+   std::shared_ptr<RegionCaller> prc = m_actionMap[action];
 
    if(prc)
    {
@@ -1218,36 +1199,34 @@ void VLM_Widget::createMicroProbeMenu()
                QAction *action = new QAction(attr->getName(), this);
 
                QString execType = attr->getDescription();
-               RegionCaller *prc = nullptr;
+               std::shared_ptr<RegionCaller> prc;
 
                if(execType == "shell")
                {
-                  prc = new ShellRegionCaller();
+                  prc = std::make_shared<ShellRegionCaller>();
                   if(prc->init(grp.getGroupName(), "", ""))
                   {
                      m_actionMap.insert(action, prc);
                   }
                   else
                   {
-                     delete prc;
                      prc = nullptr;
                      logW<<"Error initializing shell call: "<<attr->getName().toStdString() << "\n";
                   }
-               }               
+               }
                if(execType == "python")
                {
-                  prc = new PythonRegionCaller();
+                  prc = std::make_shared<PythonRegionCaller>();
                   if(prc->init(fInfo.path(), fInfo.baseName(), attr->getValue()))
                   {
                      m_actionMap.insert(action, prc);
                   }
                   else
                   {
-                     delete prc;
                      prc = nullptr;
                      logW<<"Error initializing python call: "<<attr->getName().toStdString() << "\n";
                   }
-               }               
+               }
 
                if(prc != nullptr)
                {
@@ -1270,7 +1249,7 @@ void VLM_Widget::createMicroProbeMenu()
 void VLM_Widget::createMicroProbeTab()
 {
 
-   m_mpTreeModel = new gstar::AnnotationTreeModel();
+   m_mpTreeModel = new gstar::AnnotationTreeModel(this);
 
    connect(m_mpTreeModel, &gstar::AnnotationTreeModel::dataChanged, this, &VLM_Widget::microModelDataChanged);
 
@@ -1918,7 +1897,7 @@ void VLM_Widget::restoreMarkerLoaded()
 
       UProbeRegionGraphicsItem* annotation = new UProbeRegionGraphicsItem(marker);
       annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-      annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+      annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
       reloadAndSelectAnnotation(m_mpTreeModel,
                                 m_mpAnnoTreeView,
@@ -1949,7 +1928,7 @@ void VLM_Widget::restoreMarkerLoaded()
 
        UProbeMarkerGraphicsItem* annotation = new UProbeMarkerGraphicsItem(marker);
        annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-       annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+       annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
        reloadAndSelectAnnotation(m_calTreeModel,
            m_calAnnoTreeView,
@@ -1967,28 +1946,6 @@ void VLM_Widget::restoreMarkerLoaded()
    tabIndexChanged(MICROPROBE_IDX);
 
 }
-
-//---------------------------------------------------------------------------
-/*
-void VLM_Widget::openSolver()
-{
-    
-    QList< QMap<QString, double> > coordPoints;
-    SolverProfileWidget solverWidget;
-    connect(&solverWidget, &SolverWidget::useUpdatedVariables, this, &VLM_Widget::useUpdatedSolverVariables );
-    connect(&solverWidget, &SolverWidget::cancelUpdatedVariables, this, &VLM_Widget::cancelUpdatedSolverVariables );
-
-    if (getMarkerCoordinatePoints(coordPoints))
-    {
-        solverWidget.setCoordinatePoints(&coordPoints);
-    }
-
-    if (solverWidget.exec() == QDialog::Accepted)
-    {
-
-    }
-}
-*/
 
 //---------------------------------------------------------------------------
 
@@ -2023,13 +1980,9 @@ void VLM_Widget::openSolver()
    bool retVal = m_solver->run();
    QApplication::restoreOverrideCursor();
 
-   if(m_solverWidget != nullptr)
-      delete m_solverWidget;
-   m_solverWidget = nullptr;
-
-   m_solverWidget = new SolverWidget();
-   connect(m_solverWidget, &SolverWidget::useUpdatedVariables, this, &VLM_Widget::useUpdatedSolverVariables );
-   connect(m_solverWidget, &SolverWidget::cancelUpdatedVariables, this, &VLM_Widget::cancelUpdatedSolverVariables );
+   m_solverWidget = std::make_unique<SolverWidget>();
+   connect(m_solverWidget.get(), &SolverWidget::useUpdatedVariables, this, &VLM_Widget::useUpdatedSolverVariables );
+   connect(m_solverWidget.get(), &SolverWidget::cancelUpdatedVariables, this, &VLM_Widget::cancelUpdatedSolverVariables );
 
    newMinCoefs = m_solver->getMinCoef();
    m_solverWidget->setCoefs(minCoefs, newMinCoefs);
@@ -2049,115 +2002,11 @@ void VLM_Widget::openSolver()
 }
 
 //---------------------------------------------------------------------------
-/*
-
-void PreferencesSolverOption::runSolver()
-{
-
-    QMap<QString, double> minCoefs;
-    QMap<QString, double> newMinCoefs;
-    QMap<QString, double> allCoefs;
-    QMap<QString, double> options;
-    QList< QMap<QString, double> > coordPoints;
-
-    AbstractSolver* impl = m_solver->getImpl();
-    SolverParameterWidget* widget;
-
-    if (impl != nullptr)
-    {
-        m_solver->setImpl(nullptr);
-        delete impl;
-        impl = nullptr;
-    }
-
-    if (m_buttonGroup->checkedId() == NM_SELECTED)
-    {
-        widget = m_NMSolverWidget;
-
-        m_solver->setImpl(new NelderMeadSolver());
-
-    }
-    else if (m_buttonGroup->checkedId() == PY_SELECTED)
-    {
-        widget = m_pythonSolverWidget;
-
-        impl = new PythonSolver();
-        //      QFileInfo fileInfo = QFileInfo(getPythonSolverPath());
-        //      if(false ==((PythonSolver*)impl)->initialPythonSolver(fileInfo.path(),
-        //                                                            fileInfo.baseName(),
-        //                                                            "my_solver"))
-        //      {
-        //         delete impl;
-        //         logW<<"Error initializing python solver";
-        //         QMessageBox::critical(nullptr,"Error", "Error Initializing Python Solver!");
-        //         return;
-        //      }
-        
-        m_solver->setImpl(impl);
-    }
-
-    getSolverPropertiesFromModel(widget,
-        allCoefs,
-        minCoefs,
-        options);
-
-    m_transformer->Init(allCoefs);
-    m_solver->setTransformer(m_transformer);
-    m_solver->setAllCoef(allCoefs);
-    m_solver->setOptions(options);
-    m_solver->setMinCoef(minCoefs);
-
-    if (m_windowList.size() > 0)
-    {
-        VLM_Widget* sws = (VLM_Widget*)m_windowList.at(0);
-        sws->getMarkerCoordinatePoints(coordPoints);
-    }
-    else
-    {
-        QMessageBox::critical(nullptr, "Solver Error", "Could not find active SWS workspace!");
-        return;
-    }
-
-    m_solver->setCoordPoints(coordPoints);
-
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    bool retVal = m_solver->run();
-    QApplication::restoreOverrideCursor();
-
-    if (m_solverWidget != nullptr)
-        delete m_solverWidget;
-    m_solverWidget = nullptr;
-
-    m_solverWidget = new SolverWidget();
-    connect(m_solverWidget,
-        &useUpdatedVariables,
-        this,
-        &useUpdatedSolverVariables);
-
-    newMinCoefs = m_solver->getMinCoef();
-    m_solverWidget->setCoefs(minCoefs, newMinCoefs);
-    m_solverWidget->setStatusString(m_solver->getLastErrorMessage());
-
-    if (retVal)
-    {
-        m_solverWidget->setUseBtnEnabled(true);
-    }
-    else
-    {
-        m_solverWidget->setUseBtnEnabled(false);
-    }
-
-    m_solverWidget->show();
-
-}
-*/
-
-//---------------------------------------------------------------------------
 
 void VLM_Widget::setLightToMicroCoordModel(gstar::CoordinateModel *model)
 {
 
-   m_lightToMicroCoordModel = model;
+   m_lightToMicroCoordModel.reset(model);
    m_lightToMicroCoordModel->setTransformerPrecision(
          Preferences::inst()->getValue(STR_PRF_DecimalPrecision).toInt());
 
@@ -2325,9 +2174,9 @@ bool VLM_Widget::verifySaveIsRequired()
 
       // Generate current save data
       QByteArray currentByteArray;
-      QBuffer* currentStatusBuffer = new QBuffer(&currentByteArray);
-      currentStatusBuffer->open(QIODevice::ReadWrite);
-      writeXMLSaveData(currentStatusBuffer);
+      QBuffer currentStatusBuffer(&currentByteArray);
+      currentStatusBuffer.open(QIODevice::ReadWrite);
+      writeXMLSaveData(&currentStatusBuffer);
 
       // Compare save data to saved data
       if (savedByteArray.size() == currentByteArray.size()) {
@@ -2343,7 +2192,6 @@ bool VLM_Widget::verifySaveIsRequired()
          }
       }
 
-      delete currentStatusBuffer;
    }
 
    return saveRequired;
@@ -2389,21 +2237,19 @@ void VLM_Widget::saveXMLCoordinateInfo(QString path)
 
 void VLM_Widget::writeXMLSaveData(QIODevice* device)
 {
-   QXmlStreamWriter* xmlWriter = new QXmlStreamWriter();
-   xmlWriter->setDevice(device);
+   QXmlStreamWriter xmlWriter;
+   xmlWriter.setDevice(device);
 
-   xmlWriter->writeStartDocument();
-   xmlWriter->writeStartElement("markers");
+   xmlWriter.writeStartDocument();
+   xmlWriter.writeStartElement("markers");
 
    // Get the crossing marker information
-   getMarkerInfo(xmlWriter);
+   getMarkerInfo(&xmlWriter);
    // Get the region marker information
-   getRegionMarkerInfo(xmlWriter);
+   getRegionMarkerInfo(&xmlWriter);
 
-   xmlWriter->writeEndElement();
-   xmlWriter->writeEndDocument();
-
-   delete xmlWriter;
+   xmlWriter.writeEndElement();
+   xmlWriter.writeEndDocument();
 }
 
 //---------------------------------------------------------------------------
@@ -2529,10 +2375,6 @@ void VLM_Widget::updateTreeView()
 void VLM_Widget::updateContextMenus()
 {
 
-   for(RegionCaller *prc : m_actionMap.values())
-   {
-      delete prc;
-   }
    m_actionMap.clear();
    createMicroProbeMenu();
 
@@ -2606,9 +2448,8 @@ void VLM_Widget::loadLiveBackground(QString fileName)
                if(_live_h5model != nullptr)
                {
                   disconnect(m_imageViewWidget, &ImageViewWidget::cbLabelChanged, this, &VLM_Widget::onElementSelect);
-                  delete _live_h5model;
-               } 
-               _live_h5model = new MapsH5Model();
+               }
+               _live_h5model = std::make_unique<MapsH5Model>();
                H5ImageModel h5image_model;
                if(_live_h5model->load(fileName))
                {
@@ -2647,6 +2488,13 @@ void VLM_Widget::loadLiveBackground(QString fileName)
                   
                   m_imageViewWidget->setLabel(STR_TOTAL_FLUORESCENCE_YIELD.c_str());
 
+                  ITransformer* prevLightTransformer = m_lightToMicroCoordModel->getTransformer();
+                  if (prevLightTransformer != nullptr)
+                  {
+                     delete prevLightTransformer;
+                     m_lightToMicroCoordModel->setTransformer(nullptr);
+                  }
+
                   MotorLookupTransformer * mapped = new MotorLookupTransformer();
                   mapped->setMotors(_live_h5model->get_x_axis(), _live_h5model->get_y_axis());
                   m_lightToMicroCoordModel->setTransformer(mapped);
@@ -2656,7 +2504,6 @@ void VLM_Widget::loadLiveBackground(QString fileName)
                }
                else
                {
-                  delete _live_h5model;
                   _live_h5model = nullptr;
                   if (h5image_model.load(fileName))
                   {
@@ -3204,7 +3051,7 @@ void VLM_Widget::loadScanRegionLinks(QString dir)
          annotation->setSameRect(load_rect);
          annotation->setGripSize();
          annotation->setMouseOverPixelCoordModel(m_coordinateModel);
-         annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+         annotation->setLightToMicroCoordModel(m_lightToMicroCoordModel.get());
 
          reloadAndSelectAnnotation(m_mpTreeModel,
                                  m_mpAnnoTreeView,
@@ -3370,76 +3217,3 @@ void VLM_Widget::saveScanRegionLinks(QString dir)
 }
 
 //---------------------------------------------------------------------------
-
-
-//---------------------------------------------------------------------------
-/*
-void VLM_Widget::solverVariableUpdate()
-{
-
-}
-
-void uProbeX::solverVariableUpdate(double valX, double valY)
-{
-
-    int id = Preferences::inst()->getValue(STR_PRF_SolverCheckedID).toInt();
-
-    if (id == 0)
-    {
-        QStringList coefList = Preferences::inst()->getValue(STR_PRF_NMCoefficient).toStringList();
-        QStringList newAttrs;
-
-        saveXYToCoefficient(valX, valY, coefList, newAttrs);
-
-        Preferences::inst()->setValue(STR_PRF_NMCoefficient,
-            newAttrs);
-    }
-    else
-    {
-        QStringList coefList = Preferences::inst()->getValue(STR_PRF_PythonCoefficient).toStringList();
-        QStringList newAttrs;
-
-        saveXYToCoefficient(valX, valY, coefList, newAttrs);
-
-        Preferences::inst()->setValue(STR_PRF_PythonCoefficient,
-            newAttrs);
-    }
-    solverEnd();
-
-}
-
-
-void uProbeX::saveXYToCoefficient(double& valX,
-    double& valY,
-    QStringList& coefList,
-    QStringList& newAttrs)
-{
-
-    for (int i = 0; i < coefList.size(); i++)
-    {
-        QString attr = coefList.at(i);
-        QStringList l = attr.split(",");
-        if (l.size() != 4)  continue;
-
-        if (l.at(0) == "m2xfm_x")
-        {
-            newAttrs.append(QString("%1,%2,%3,%4").arg(l.at(0))
-                .arg(QString::number(valX))
-                .arg(l.at(2))
-                .arg(l.at(3)));
-        }
-        else if (l.at(0) == "m2xfm_y")
-        {
-            newAttrs.append(QString("%1,%2,%3,%4").arg(l.at(0))
-                .arg(QString::number(valY))
-                .arg(l.at(2))
-                .arg(l.at(3)));
-        }
-        else
-        {
-            newAttrs.append(attr);
-        }
-    }
-
-}
-*/

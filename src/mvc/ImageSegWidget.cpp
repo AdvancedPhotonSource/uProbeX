@@ -42,6 +42,9 @@ void ImageSegWidget::createLayout()
    
    connect(m_selectionModel, &QItemSelectionModel::currentChanged, this, &ImageSegWidget::currentRoiChanged);
    appendAnnotationTab(false);
+
+   connect(_contrast_widget, &ContrastWidget::call_redraw, this, &ImageSegWidget::callRedraw);
+   
    setLayout(layout);
 }
 
@@ -49,7 +52,17 @@ void ImageSegWidget::createLayout()
 
 void ImageSegWidget::setImageFromArray(ArrayXXr<float>& img_arr, QVector<QRgb>& colormap, bool clickFill)
 {
-    QImage image = m_imageViewWidget->generate_img(img_arr, colormap);
+    GenerateImageProp props;
+    //props.analysis_type = _curAnalysis.toStdString();
+    //props.log_color = false;
+    //props.normalizer = nullptr;
+    //props.calib_curve = nullptr;
+    props.contrast_limits = _contrast_widget->get_contrast_limits();
+    //props.show_legend = false;
+    //props.invert_y = Preferences::inst()->getValue(STR_INVERT_Y_AXIS).toBool();
+    props.global_contrast = _contrast_widget->is_global_contrast_checked();
+
+    QImage image = m_imageViewWidget->generate_img(img_arr, colormap, props);
     if (Preferences::inst()->getValue(STR_INVERT_Y_AXIS).toBool())
     {
         image = image.mirrored(false, true);
@@ -141,7 +154,7 @@ void ImageSegWidget::addRoiMask(gstar::RoiMaskGraphicsItem* roi)
         m_imageViewWidget->disconnectRoiGraphicsItemToMouseEvents(_selected_roi);
     }
 
-    insertAndSelectAnnotation(m_treeModel, m_annoTreeView, m_selectionModel, roi, false);
+    insertAndSelectAnnotation(m_treeModel.get(), m_annoTreeView, m_selectionModel, roi, false);
     // auto select the new roi
     _selected_roi = roi;
     if (_selected_roi != nullptr)

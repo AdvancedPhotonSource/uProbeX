@@ -8,6 +8,7 @@
 
 //---------------------------------------------------------------------------
 
+#include <memory>
 #include <QMainWindow>
 #include <QApplication>
 #include <QMap>
@@ -127,7 +128,7 @@ private slots:
 
    void open_spectra_and_override_file();
 
-   void make_spectra_window(QString path, data_struct::Params_Override<double>* po);
+   void make_spectra_window(QString path, std::shared_ptr<data_struct::Params_Override<double>> po);
    
    void open_VLM_File();
 
@@ -290,7 +291,7 @@ private:
 
    QMenu* _menu_batch;
 
-   QMenu* _menu_view;
+   std::unique_ptr<QMenu> _menu_view;
    QMenu* _menu_view_file_top;
    QMenu* _menu_view_file_side;
    QMenu* _menu_view_marker;
@@ -315,7 +316,7 @@ private:
    /**
     * @brief _liveMapsViewer
     */
-   LiveMapsElementsWidget*  _liveMapsViewer;
+   std::unique_ptr<LiveMapsElementsWidget> _liveMapsViewer;
 
    // log dock
    QDockWidget *_log_dock;
