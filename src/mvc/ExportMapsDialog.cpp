@@ -102,9 +102,44 @@ void ExportMapsDialog::setRunEnabled(bool val)
 
 //---------------------------------------------------------------------------
 
+void ExportMapsDialog::set_dir(QDir directory)
+{
+    _directory = directory;
+    if (_le_dir != nullptr)
+    {
+        _le_dir->setText(_directory.absolutePath());
+    }
+}
+
+//---------------------------------------------------------------------------
+
+void ExportMapsDialog::set_batch_mode(bool val)
+{
+    _export_all->setVisible(false == val);
+    _save_screen->setVisible(false == val);
+    if (val)
+    {
+        // Batch always exports everything, the checkbox is still read by the caller.
+        _export_all->setChecked(true);
+        _save_screen->setChecked(false);
+        _processing_grp->setTitle("Batch Export Image Options");
+    }
+    else
+    {
+        _processing_grp->setTitle("Export Image Options");
+    }
+}
+
+//---------------------------------------------------------------------------
+
 void ExportMapsDialog::on_browse()
 {
-    _directory = QFileDialog::getExistingDirectory(this, "Export Directory", _directory.absolutePath(), FILE_DIALOG_OPTIONS | QFileDialog::ShowDirsOnly);
+    QString dirName = QFileDialog::getExistingDirectory(this, "Export Directory", _directory.absolutePath(), FILE_DIALOG_OPTIONS | QFileDialog::ShowDirsOnly);
+    // Dialog returns a null string if the user pressed cancel.
+    if (false == dirName.isEmpty())
+    {
+        set_dir(QDir(dirName));
+    }
 }
 
 //---------------------------------------------------------------------------

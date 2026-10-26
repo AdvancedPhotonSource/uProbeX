@@ -116,8 +116,6 @@ public slots:
 
    void on_invert_y_axis(int);
 
-   void on_export_image_pressed();
-
    void on_export_images();
 
    void on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*> roi_list);
@@ -154,6 +152,12 @@ protected:
    virtual void displayContextMenu(QWidget* parent, const QPoint& pos);
 
    void _appendRoiTab();
+
+   /**
+    * @brief Drop everything that points into the dataset we are leaving. Child widgets hold
+    * non-owning pointers into the model, so this has to run even when there is no new model.
+    */
+   void _clear_model_bindings();
 
    std::shared_ptr<MapsH5Model> _model;
 
@@ -211,8 +215,6 @@ protected:
    QCheckBox* _chk_show_scalebar;
 
    QPushButton *_btn_export_as_image;
-
-   std::unique_ptr<ExportMapsDialog> _export_maps_dialog;
 
    QWidget* _counts_window;
 
