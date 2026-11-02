@@ -3208,10 +3208,18 @@ int map_render_scale(const GenerateImageProp& props, int data_rows)
 
 //---------------------------------------------------------------------------
 
+// Color table slot reserved for the colorbar background. It is forced to black and no
+// measurement is ever mapped to it, so the band behind the strip is a fixed color rather than
+// whatever the selected colormap happens to hold there. Measurements use the rest of the table.
+static const int COLORBAR_BG_IDX = 0;
+static const int COLORMAP_FIRST_IDX = COLORBAR_BG_IDX + 1;
+static const int COLORMAP_LAST_IDX = 255;
+
+//---------------------------------------------------------------------------
+
 // Appends the colormap strip and its end values to an already upscaled map. The strip is drawn
 // here rather than into the data image so it keeps a fixed orientation - max at the top - instead
-// of being flipped along with the map by invert_y. The band behind the strip and the text is the
-// mid table color, so the two read as one block.
+// of being flipped along with the map by invert_y.
 static QImage draw_colorbar(const QImage& map, const QVector<QRgb>& color_table, float counts_min, float counts_max)
 {
     if (map.isNull() || map.height() < 1)
@@ -3246,9 +3254,12 @@ static QImage draw_colorbar(const QImage& map, const QVector<QRgb>& color_table,
         return map;
     }
 
-    QRgb fill = color_table.size() > 127 ? color_table[127] : qRgb(127, 127, 127);
+    // The reserved slot, not a color borrowed from the middle of the data range.
+    QRgb fill = color_table.size() > COLORBAR_BG_IDX ? color_table[COLORBAR_BG_IDX] : qRgb(0, 0, 0);
     QColor fill_color(fill);
-    // Rec. 601 luma, matching the foreground pick in ImageViewWidgetCompact::createLayout.
+    // Rec. 601 luma, matching the foreground pick in ImageViewWidgetCompact::createLayout. The
+    // reserved color is black today, so this picks white; left as a computation so the text stays
+    // readable if that color is ever changed.
     double luma = 0.299 * fill_color.redF() + 0.587 * fill_color.greenF() + 0.114 * fill_color.blueF();
     QColor text_color = luma > 0.5 ? Qt::black : Qt::white;
 
@@ -3259,11 +3270,13 @@ static QImage draw_colorbar(const QImage& map, const QVector<QRgb>& color_table,
     painter.drawImage(0, 0, map);
 
     // Top of the strip is the top of the color table, so the gradient reads the same way round
-    // as the numbers beside it regardless of invert_y.
+    // as the numbers beside it regardless of invert_y. Spans the same range the measurements
+    // were mapped into, so the strip shows exactly the colors the map can contain.
+    const int span = COLORMAP_LAST_IDX - COLORMAP_FIRST_IDX;
     for (int row = 0; row < strip_h; row++)
     {
-        int idx = 255 - ((row * 255) / std::max(1, strip_h - 1));
-        idx = std::max(0, std::min(255, idx));
+        int idx = COLORMAP_LAST_IDX - ((row * span) / std::max(1, strip_h - 1));
+        idx = std::max(COLORMAP_FIRST_IDX, std::min(COLORMAP_LAST_IDX, idx));
         QRgb c = color_table.size() > idx ? color_table[idx] : qRgb(idx, idx, idx);
         painter.fillRect(QRect(strip_x, strip_top + row, strip_w, 1), QColor(c));
     }
@@ -3319,20 +3332,24 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
 
         // Every pixel below is written as an 8 bit index, so the table has to cover all 256 of
         // them. A short table leaves the conversion to RGB32 indexing past the end of it.
+        QVector<QRgb> color_table;
         if(props.selected_colormap != nullptr && props.selected_colormap->size() == 256)
         {
-            image.setColorTable(*props.selected_colormap);
+            // Copied, not referenced: the colormap is shared with every other map on screen and
+            // the reserved slot below would otherwise be written into all of them.
+            color_table = *props.selected_colormap;
         }
         else
         {
-            QVector<QRgb> gray_colormap;
             for (int i = 0; i < 256; i++)
             {
-                gray_colormap.append(qRgb(i, i, i));
+                color_table.append(qRgb(i, i, i));
             }
-            image.setColorTable(gray_colormap);
         }
-        
+        // Reserved for the colorbar background. Measurements are mapped into the slots after it.
+        color_table[COLORBAR_BG_IDX] = qRgb(0, 0, 0);
+        image.setColorTable(color_table);
+
 
         // Seeded so the two branches below are not the only thing standing between an unknown
         // contrast_limits string and uninitialized reads, now that the legend labels print them.
@@ -3433,6 +3450,13 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
         //unsigned char *data = new unsigned char[height * bpl];
         
         float max_min = counts_max - counts_min;
+        // A flat map - a constant scaler channel, or a contrast range collapsed to a point -
+        // would divide by zero here and cast a NaN to unsigned char, which is undefined. Every
+        // measurement is the same value in that case, so put them all at the bottom of the scale.
+        const bool flat = !(max_min > 0.0f);
+        // Measurements never take COLORBAR_BG_IDX, so the colorbar background stays a color that
+        // cannot be confused with a reading.
+        const float span = (float)(COLORMAP_LAST_IDX - COLORMAP_FIRST_IDX);
         for (int row = 0; row < height; ++row)
         {
             for (int col = 0; col < width; ++col)
@@ -3441,9 +3465,12 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
                 float cnts = normalized(row, col);
                 cnts = std::min(counts_max, cnts);
                 cnts = std::max(counts_min, cnts);
-                //data[row * bpl + col] = static_cast<unsigned char>(((cnts - counts_min) / max_min) * 255);
                 //convert to pixel
-                unsigned char data = (unsigned char)(((cnts - counts_min) / max_min) * 255);
+                unsigned char data = (unsigned char)COLORMAP_FIRST_IDX;
+                if (flat == false)
+                {
+                    data = (unsigned char)(COLORMAP_FIRST_IDX + (((cnts - counts_min) / max_min) * span));
+                }
                 image.setPixel(col, row, data);
             }
         }
