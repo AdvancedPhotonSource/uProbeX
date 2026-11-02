@@ -101,6 +101,14 @@ struct GenerateImageProp
     const Calibration_curve<double>* calib_curve;
 };
 
+// How many image pixels gen_image() gives each measurement, so the baked colorbar labels have
+// enough resolution to be legible. One measurement becomes an N x N block of identical pixels -
+// the binning is untouched, there are just more pixels per bin - which means every conversion
+// from a scene/pixmap position back to a data index has to divide by this. Returns 1 when no
+// colorbar is drawn, so views that do not do that division are left at data resolution.
+// Callers must derive N from this one function rather than from the rendered image size.
+int map_render_scale(const GenerateImageProp& props, int data_rows);
+
 void gen_insert_order_list(std::vector<std::string> &all_lines);
 void gen_insert_order_lists(std::vector<std::string> &element_lines, std::vector<std::string> &scalers_to_add_first, std::vector<std::string>& final_counts_to_add_before_scalers);
 

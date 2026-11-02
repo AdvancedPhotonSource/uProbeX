@@ -448,8 +448,11 @@ void ImageViewWidgetCompact::onMousePressEvent(QGraphicsSceneMouseEvent* event)
     if (selectedItem) 
     {
         QPointF seletionPoint = selectedItem->last_local_intersection_point();
-        unsigned int r = (unsigned int)seletionPoint.y();
-        unsigned int c = (unsigned int)seletionPoint.x();
+        // The point is in pixmap pixels. gen_image gives each measurement a scale x scale block,
+        // so divide back down to land on the measurement the user actually clicked.
+        int scale = renderScaleAt(0);
+        unsigned int r = (unsigned int)seletionPoint.y() / scale;
+        unsigned int c = (unsigned int)seletionPoint.x() / scale;
         if(m_coordWidget->model() != nullptr)
         {
             double outX, outY, outZ;
@@ -955,7 +958,9 @@ void ImageViewWidgetCompact::updateScaleBar()
         _scale_bar_text->setPlainText(QString("%1 px").arg(nice_pixels));
     }
 
-    _scale_bar_line->setLine(bar_x, bar_y, bar_x + nice_pixels, bar_y);
+    // nice_pixels counts measurements; the line is drawn in scene units, where each measurement
+    // occupies renderScaleAt() pixels.
+    _scale_bar_line->setLine(bar_x, bar_y, bar_x + (nice_pixels * (double)renderScaleAt(0)), bar_y);
 
     //_scale_bar_line->setLine(bar_x, bar_y, bar_x + bar_length, bar_y);
 

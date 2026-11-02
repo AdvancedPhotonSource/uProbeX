@@ -3190,23 +3190,42 @@ QPixmap MapsH5Model::gen_pixmap(const GenerateImageProp& props, ArrayXXr<float>&
 
 //---------------------------------------------------------------------------
 
-// Widens an already rendered map so the colormap strip can carry its end values, and prints the
-// max beside the bright end of the strip and the min beside the dark end. The added column is
-// filled with the same mid table color that frames the strip, so the labels read as part of it.
-static QImage draw_legend_labels(const QImage& src, const QVector<QRgb>& color_table, int strip_right, int startH, int endH, float counts_min, float counts_max, bool invert_y)
+int map_render_scale(const GenerateImageProp& props, int data_rows)
 {
-    if (src.isNull() || src.height() < 1)
+    // Matches gen_image's own test for whether a colorbar gets drawn at all.
+    if (props.show_legend == false || data_rows <= 3)
     {
-        return src;
+        return 1;
+    }
+    // Enough rows that the label text below has room to be read, without blowing up maps that
+    // are already large. Deliberately truncating: a map that is already over half the target
+    // reads fine as it is and does not need its memory doubled to gain nothing. Capped because
+    // the grid view holds one of these per cell.
+    const int target_rows = 600;
+    int scale = target_rows / data_rows;
+    return std::max(1, std::min(8, scale));
+}
+
+//---------------------------------------------------------------------------
+
+// Appends the colormap strip and its end values to an already upscaled map. The strip is drawn
+// here rather than into the data image so it keeps a fixed orientation - max at the top - instead
+// of being flipped along with the map by invert_y. The band behind the strip and the text is the
+// mid table color, so the two read as one block.
+static QImage draw_colorbar(const QImage& map, const QVector<QRgb>& color_table, float counts_min, float counts_max)
+{
+    if (map.isNull() || map.height() < 1)
+    {
+        return map;
     }
 
     const QString max_str = QString::number(counts_max, 'g', 4);
     const QString min_str = QString::number(counts_min, 'g', 4);
 
     QFont font;
-    // Tie the text to the map's own scale: the views stretch the pixmap to the cell, so a fixed
-    // point size would be a different apparent size on every map.
-    font.setPixelSize(std::max(7, std::min(24, (int)(src.height() * 0.08))));
+    // Tie the text to the rendered height: the views stretch the pixmap to fit the cell, so a
+    // fixed size would come out different on every map.
+    font.setPixelSize(std::max(9, std::min(28, (int)(map.height() * 0.055))));
     QFontMetrics metrics(font);
 
     const int pad = std::max(2, metrics.height() / 4);
@@ -3215,28 +3234,50 @@ static QImage draw_legend_labels(const QImage& src, const QVector<QRgb>& color_t
     const int text_w = std::max(std::max(metrics.horizontalAdvance(max_str), metrics.horizontalAdvance(min_str)),
                                 std::max(metrics.tightBoundingRect(max_str).width(), metrics.tightBoundingRect(min_str).width()));
 
+    int strip_w = (int)(map.width() * 0.05);
+    strip_w = std::max(3, std::min(strip_w, 40));
+
+    const int strip_x = map.width() + pad;
+    const int strip_top = (int)(map.height() * 0.1);
+    const int strip_bottom = map.height() - strip_top;
+    const int strip_h = strip_bottom - strip_top;
+    if (strip_h < 1)
+    {
+        return map;
+    }
+
     QRgb fill = color_table.size() > 127 ? color_table[127] : qRgb(127, 127, 127);
     QColor fill_color(fill);
     // Rec. 601 luma, matching the foreground pick in ImageViewWidgetCompact::createLayout.
     double luma = 0.299 * fill_color.redF() + 0.587 * fill_color.greenF() + 0.114 * fill_color.blueF();
     QColor text_color = luma > 0.5 ? Qt::black : Qt::white;
 
-    QImage out(src.width() + pad + text_w + pad, src.height(), QImage::Format_RGB32);
+    QImage out(strip_x + strip_w + pad + text_w + pad, map.height(), QImage::Format_RGB32);
     out.fill(fill_color);
 
     QPainter painter(&out);
-    painter.drawImage(0, 0, src);
+    painter.drawImage(0, 0, map);
+
+    // Top of the strip is the top of the color table, so the gradient reads the same way round
+    // as the numbers beside it regardless of invert_y.
+    for (int row = 0; row < strip_h; row++)
+    {
+        int idx = 255 - ((row * 255) / std::max(1, strip_h - 1));
+        idx = std::max(0, std::min(255, idx));
+        QRgb c = color_table.size() > idx ? color_table[idx] : qRgb(idx, idx, idx);
+        painter.fillRect(QRect(strip_x, strip_top + row, strip_w, 1), QColor(c));
+    }
+
     painter.setFont(font);
     painter.setPen(text_color);
 
-    const int text_x = strip_right + pad;
+    const int text_x = strip_x + strip_w + pad;
     const int text_h = metrics.height();
-    // A mirrored image carries a mirrored strip, so the bright end is at the bottom.
-    const int max_y = invert_y ? endH : startH;
-    const int min_y = invert_y ? startH : endH;
+    const int max_y = std::max(0, std::min(map.height() - text_h, strip_top - text_h / 2));
+    const int min_y = std::max(0, std::min(map.height() - text_h, strip_bottom - text_h / 2));
 
-    painter.drawText(QRect(text_x, std::max(0, std::min(src.height() - text_h, max_y - text_h / 2)), text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, max_str);
-    painter.drawText(QRect(text_x, std::max(0, std::min(src.height() - text_h, min_y - text_h / 2)), text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, min_str);
+    painter.drawText(QRect(text_x, max_y, text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, max_str);
+    painter.drawText(QRect(text_x, min_y, text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, min_str);
     painter.end();
 
     return out;
@@ -3269,20 +3310,13 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
             normalized = normalized.unaryExpr([](float v) { return std::isfinite(v) ? v : 0.0f; });
         }
 
-        // add to width for color maps ledgend
-        int cm_ledgend = width * .05; // add 5% width for ledgend
-        if (cm_ledgend == 0)
-        {
-            cm_ledgend = 3;
-        }
-        if (height <= 3 || props.show_legend == false)
-        {
-            cm_ledgend = 0;
-        }
+        // The colorbar and its labels are composed on afterwards, at the upscaled resolution,
+        // so this image holds nothing but the measurements - one pixel each.
+        const bool draw_colorbar_strip = (props.show_legend && height > 3);
+        const int render_scale = map_render_scale(props, height);
 
-                
-        QImage image(width + cm_ledgend, height, QImage::Format_Indexed8);
-        
+        QImage image(width, height, QImage::Format_Indexed8);
+
         // Every pixel below is written as an 8 bit index, so the table has to cover all 256 of
         // them. A short table leaves the conversion to RGB32 indexing past the end of it.
         if(props.selected_colormap != nullptr && props.selected_colormap->size() == 256)
@@ -3416,49 +3450,6 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
         //memcpy(image.bits(), data, height * bpl);
         //delete [] data;
 
-        if (height > 3 || props.show_legend == true)
-        {
-            // add color map ledgend
-            int startH = height * .1;
-            int endH = height - startH;
-            int startW = width + 1;
-            int endW = width + cm_ledgend;
-            if (cm_ledgend == 3)
-            {
-                endW--;
-            }
-
-            float inc = 255.0 / float(endH - startH);
-            float fcol = 255.0;
-
-            for (int row = 0; row < height; row++)
-            {
-                if (row >= startH && row <= endH)
-                {
-                    for (int col = width; col < width + cm_ledgend; col++)
-                    {
-                        if (col >= startW && col <= endW)
-                        {
-                            image.setPixel(col, row, static_cast<unsigned char>(fcol));
-                        }
-                        else
-                        {
-                            image.setPixel(col, row, static_cast<unsigned char>(127));
-                        }
-                    }
-                    fcol -= inc;
-                    fcol = std::max(fcol, float(0.0));
-                }
-                else
-                {
-                    for (int col = width; col < width + cm_ledgend; col++)
-                    {
-                        image.setPixel(col, row, static_cast<unsigned char>(127));
-                    }
-                }
-            }
-        }
-        
         if (props.invert_y)
         {
             image = image.mirrored(false, true);
@@ -3466,15 +3457,22 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
 
         QImage rgb_image = image.convertToFormat(QImage::Format_RGB32);
 
-        if (cm_ledgend > 0)
+        if (render_scale > 1)
         {
-            // Label the ends of the colormap strip with the values the color scale actually maps.
-            // Drawn here, after the mirror and the RGB conversion, so the glyphs are not flipped
-            // and are not quantized down to the 256 entry color table. invert_y mirrors the strip
-            // along with the image, so the bright end - and with it the max - moves to the bottom.
-            int startH = height * .1;
-            int endH = height - startH;
-            rgb_image = draw_legend_labels(rgb_image, image.colorTable(), width + cm_ledgend, startH, endH, counts_min, counts_max, props.invert_y);
+            // FastTransformation is nearest neighbour, so each measurement comes out as an exact
+            // render_scale x render_scale block of identical pixels. Nothing is interpolated and
+            // no bin is blended into its neighbour - there are simply more pixels per bin, which
+            // gives the labels below room to be legible. Every scene-position-to-data-index
+            // conversion divides by the same factor, via map_render_scale().
+            rgb_image = rgb_image.scaled(width * render_scale, height * render_scale, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        }
+
+        if (draw_colorbar_strip)
+        {
+            // Labelled with the values the color scale actually maps, and composed after the
+            // mirror and the RGB conversion so the glyphs are neither flipped nor quantized down
+            // to the 256 entry color table.
+            rgb_image = draw_colorbar(rgb_image, image.colorTable(), counts_min, counts_max);
         }
 
         //end = std::chrono::system_clock::now();

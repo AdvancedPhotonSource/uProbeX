@@ -36,6 +36,25 @@ ImageViewWidget::~ImageViewWidget()
 
 //---------------------------------------------------------------------------
 
+int ImageViewWidget::renderScaleAt(int grid_idx) const
+{
+    auto itr = _render_scales.find(grid_idx);
+    if(itr == _render_scales.end())
+    {
+        return 1;
+    }
+    return std::max(1, itr->second);
+}
+
+//---------------------------------------------------------------------------
+
+void ImageViewWidget::setRenderScaleAt(int grid_idx, int scale)
+{
+    _render_scales[grid_idx] = std::max(1, scale);
+}
+
+//---------------------------------------------------------------------------
+
 void ImageViewWidget::setCoordsVisible(bool val)
 {
     m_coordWidget->setVisible(val, val, val);

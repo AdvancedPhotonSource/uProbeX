@@ -8,6 +8,7 @@
 
 //---------------------------------------------------------------------------
 
+#include <map>
 #include "gstar/CoordinateWidget.h"
 #include "gstar/ImageViewScene.h"
 #include "gstar/RangeWidget.h"
@@ -148,6 +149,15 @@ public:
 
    virtual void updateMinMax(unsigned int idx, const ArrayXXr<float>& normalized) = 0;
 
+   /**
+    * How many image pixels gen_image() gave each measurement in the pixmap at grid_idx. Anything
+    * turning a scene or pixmap position into a data row/column has to divide by this, and
+    * anything drawing over the map in data coordinates has to multiply by it. Defaults to 1.
+    */
+   int renderScaleAt(int grid_idx) const;
+
+   void setRenderScaleAt(int grid_idx, int scale);
+
    bool set_null_mouse_pos;
 
 public slots:
@@ -284,6 +294,11 @@ private:
    virtual void updateScaleBar() = 0;
 
 protected:
+
+   /**
+    * Image pixels per measurement, per grid index. Absent means 1.
+    */
+   std::map<int, int> _render_scales;
 
    CoordinateWidget* m_coordWidget;
 

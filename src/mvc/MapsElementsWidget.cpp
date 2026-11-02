@@ -37,6 +37,9 @@ struct ImageJobResult
 {
     QImage image;
     ArrayXXr<float> normalized;
+    // Image pixels per measurement in image. Computed on the worker because it needs the props
+    // the job was enqueued with, which are not kept past the enqueue on the gui side.
+    int render_scale = 1;
 };
 
 // Counts arrays are not guaranteed to agree with the axis dims, and roi pixel lists can come from
@@ -707,7 +710,11 @@ void MapsElementsWidget::openImageSegDialog()
         }
         for (auto itr : roi_list)
         {
-            _img_seg_diag.append_roi((gstar::RoiMaskGraphicsItem*)(itr->duplicate()));
+            gstar::RoiMaskGraphicsItem* copy = (gstar::RoiMaskGraphicsItem*)(itr->duplicate());
+            // The dialog draws its maps at one pixel per measurement, unlike this widget, so the
+            // copy goes back to painting the mask at its own size.
+            copy->setRenderScale(1);
+            _img_seg_diag.append_roi(copy);
         }
         _spectra_widget->deleteAllROISpectra();
 
@@ -1573,16 +1580,12 @@ void MapsElementsWidget::model_updated()
     for (auto& itr : _model->get_map_rois())
     {
         
-        QRectF scene_dims = m_imageViewWidget->getSceneRect();
-        int width = (int)scene_dims.width();
-        int height = (int)scene_dims.height();
-        // Nothing has been drawn for this dataset yet, so the scene can still be empty. Falling
-        // back keeps the mask from coming out 0x0, which would silently drop every roi pixel.
-        if (width < 1 || height < 1)
-        {
-            width = (int)_model->get_x_axis().cols();
-            height = (int)_model->get_y_axis().rows();
-        }
+        // pixel_list holds data indices, so the mask is sized in measurements, not in scene
+        // pixels - the scene is both upscaled by the render scale and widened by the colorbar.
+        int width = (int)_model->get_x_axis().cols();
+        int height = (int)_model->get_y_axis().rows();
+        // No axes on this dataset. Falling back keeps the mask from coming out 0x0, which would
+        // silently drop every roi pixel.
         if (width < 1 || height < 1)
         {
             for (const auto& p_itr : itr.second.pixel_list)
@@ -1591,8 +1594,16 @@ void MapsElementsWidget::model_updated()
                 height = std::max(height, p_itr.second + 1);
             }
         }
+        if (width < 1 || height < 1)
+        {
+            QRectF scene_dims = m_imageViewWidget->getSceneRect();
+            int scale = std::max(1, m_imageViewWidget->renderScaleAt(0));
+            width = (int)scene_dims.width() / scale;
+            height = (int)scene_dims.height() / scale;
+        }
         logI<< "Loading roi: "<< itr.first<<"\n";
         gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(QString(itr.first.c_str()), itr.second.color, itr.second.color_alpha, width, height, itr.second.pixel_list);
+        roi->setRenderScale(m_imageViewWidget->renderScaleAt(0));
         insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, roi);
         if (itr.second.int_spec.count(_model->getDatasetName().toStdString()) > 0)
         {
@@ -1677,6 +1688,8 @@ void MapsElementsWidget::redrawCounts()
                 }
                 if (_model->regionLinks().count(element) > 0)
                 {
+                    // Not produced by gen_image, so it never got the render upscale.
+                    m_imageViewWidget->setRenderScaleAt(vidx, 1);
                     m_imageViewWidget->setSubScenePixmap(vidx, QPixmap::fromImage((_model->regionLinks().at(element))));
                 }
                 else
@@ -1689,6 +1702,7 @@ void MapsElementsWidget::redrawCounts()
                         {
                             ImageJobResult job;
                             job.image = model->gen_image(props, job.normalized);
+                            job.render_scale = map_render_scale(props, (int)job.normalized.rows());
                             return job;
                         });
                 }
@@ -1701,6 +1715,7 @@ void MapsElementsWidget::redrawCounts()
                 {
                     m_imageViewWidget->setCountsTrasnformAt(itr.first, job.normalized);
                 }
+                m_imageViewWidget->setRenderScaleAt(itr.first, job.render_scale);
                 m_imageViewWidget->setSubScenePixmap(itr.first, QPixmap::fromImage(job.image));
             }
         }
@@ -1841,6 +1856,7 @@ void MapsElementsWidget::displayCounts(const std::string analysis_type, const st
         GenerateImageProp props = generate_image_props(analysis_type, element, log_color, grid_idx);
         
         QPixmap p = _model->gen_pixmap(props, normalized);
+        m_imageViewWidget->setRenderScaleAt(grid_idx, map_render_scale(props, (int)normalized.rows()));
         m_imageViewWidget->setSubScenePixmap(grid_idx, p);
         if(normalized.rows() > 0 && normalized.cols() > 0)
         {
@@ -1873,6 +1889,7 @@ QPixmap MapsElementsWidget::generate_pixmap(const std::string analysis_type, con
         ArrayXXr<float> normalized;
         GenerateImageProp props = generate_image_props(analysis_type, element, log_color, grid_idx);
         QPixmap pm = _model->gen_pixmap(props, normalized);
+        m_imageViewWidget->setRenderScaleAt(grid_idx, map_render_scale(props, (int)normalized.rows()));
         if(normalized.rows() > 0 && normalized.cols() > 0)
         {
             m_imageViewWidget->setCountsTrasnformAt(grid_idx, normalized);
@@ -1909,7 +1926,16 @@ void MapsElementsWidget::on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*
 
         for (auto& itr : roi_list)
         {
-            insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, itr->duplicate());
+            // The copy is drawn over this widget's maps, which are upscaled; the original came
+            // from a view that is not. Only the painting changes - the mask stays one pixel per
+            // measurement, so to_roi_vec below still yields data indices.
+            gstar::AbstractGraphicsItem* copy = itr->duplicate();
+            gstar::RoiMaskGraphicsItem* roi_copy = dynamic_cast<gstar::RoiMaskGraphicsItem*>(copy);
+            if (roi_copy != nullptr)
+            {
+                roi_copy->setRenderScale(m_imageViewWidget->renderScaleAt(0));
+            }
+            insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, copy);
             std::vector<std::pair<int, int>> pixel_list;
             itr->to_roi_vec(pixel_list);
             auto int_spectra = std::make_shared<data_struct::Spectra<double>>();

@@ -389,12 +389,21 @@ QRectF ImageViewWidgetSubWin::getSceneRect()
 
 void ImageViewWidgetSubWin::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
 {
-    int x = event->scenePos().x();
-    int y = event->scenePos().y();
+    // Scene position is in image pixels; the transformers below index the data array, so undo
+    // the render upscale that gen_image applied (one measurement spans scale x scale pixels).
+    int scale = renderScaleAt(0);
+    int x = (int)(event->scenePos().x()) / scale;
+    int y = (int)(event->scenePos().y()) / scale;
     m_coordWidget -> setCoordinate(x,y);
+    int idx = 0;
     for(auto &itr : _sub_windows)
     {
-        itr.counts_coord_widget->setCoordinate(x, y, 0);
+        int sub_scale = renderScaleAt(idx);
+        // Deliberately integer division: the transformers want a data row/column index.
+        int sub_x = (int)(event->scenePos().x()) / sub_scale;
+        int sub_y = (int)(event->scenePos().y()) / sub_scale;
+        itr.counts_coord_widget->setCoordinate((double)sub_x, (double)sub_y, 0.0);
+        idx++;
     }
 
 }
@@ -942,8 +951,11 @@ void ImageViewWidgetSubWin::updateScaleBar()
         {
             
             double outX0, outX1, outY, outZ;
+            // nice_pixels is a length in image pixels; the motor transformer is indexed in data
+            // pixels, so step it by the measurement count the bar actually spans.
+            double nice_data_px = nice_pixels / (double)renderScaleAt(0);
             m_coordWidget->model()->runTransformer(0.0, 0.0, 0.0, &outX0, &outY, &outZ);
-            m_coordWidget->model()->runTransformer(nice_pixels, 0.0, 0.0, &outX1, &outY, &outZ);
+            m_coordWidget->model()->runTransformer(nice_data_px, 0.0, 0.0, &outX1, &outY, &outZ);
             // reuse outY since outY and outZ not needed.
             outY = std::abs(outX1 - outX0);
             text->setPlainText(QString("%1 um").arg(outY));
