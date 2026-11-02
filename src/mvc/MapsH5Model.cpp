@@ -7,6 +7,9 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPainter>
+#include <QFont>
+#include <QFontMetrics>
 #include <tiffio.h>
 #include "core/str_defines.h"
 
@@ -3187,6 +3190,60 @@ QPixmap MapsH5Model::gen_pixmap(const GenerateImageProp& props, ArrayXXr<float>&
 
 //---------------------------------------------------------------------------
 
+// Widens an already rendered map so the colormap strip can carry its end values, and prints the
+// max beside the bright end of the strip and the min beside the dark end. The added column is
+// filled with the same mid table color that frames the strip, so the labels read as part of it.
+static QImage draw_legend_labels(const QImage& src, const QVector<QRgb>& color_table, int strip_right, int startH, int endH, float counts_min, float counts_max, bool invert_y)
+{
+    if (src.isNull() || src.height() < 1)
+    {
+        return src;
+    }
+
+    const QString max_str = QString::number(counts_max, 'g', 4);
+    const QString min_str = QString::number(counts_min, 'g', 4);
+
+    QFont font;
+    // Tie the text to the map's own scale: the views stretch the pixmap to the cell, so a fixed
+    // point size would be a different apparent size on every map.
+    font.setPixelSize(std::max(7, std::min(24, (int)(src.height() * 0.08))));
+    QFontMetrics metrics(font);
+
+    const int pad = std::max(2, metrics.height() / 4);
+    // tightBoundingRect catches glyph overhang that horizontalAdvance leaves out, so the last
+    // digit is not shaved off by the right edge of the image.
+    const int text_w = std::max(std::max(metrics.horizontalAdvance(max_str), metrics.horizontalAdvance(min_str)),
+                                std::max(metrics.tightBoundingRect(max_str).width(), metrics.tightBoundingRect(min_str).width()));
+
+    QRgb fill = color_table.size() > 127 ? color_table[127] : qRgb(127, 127, 127);
+    QColor fill_color(fill);
+    // Rec. 601 luma, matching the foreground pick in ImageViewWidgetCompact::createLayout.
+    double luma = 0.299 * fill_color.redF() + 0.587 * fill_color.greenF() + 0.114 * fill_color.blueF();
+    QColor text_color = luma > 0.5 ? Qt::black : Qt::white;
+
+    QImage out(src.width() + pad + text_w + pad, src.height(), QImage::Format_RGB32);
+    out.fill(fill_color);
+
+    QPainter painter(&out);
+    painter.drawImage(0, 0, src);
+    painter.setFont(font);
+    painter.setPen(text_color);
+
+    const int text_x = strip_right + pad;
+    const int text_h = metrics.height();
+    // A mirrored image carries a mirrored strip, so the bright end is at the bottom.
+    const int max_y = invert_y ? endH : startH;
+    const int min_y = invert_y ? startH : endH;
+
+    painter.drawText(QRect(text_x, std::max(0, std::min(src.height() - text_h, max_y - text_h / 2)), text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, max_str);
+    painter.drawText(QRect(text_x, std::max(0, std::min(src.height() - text_h, min_y - text_h / 2)), text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, min_str);
+    painter.end();
+
+    return out;
+}
+
+//---------------------------------------------------------------------------
+
 QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& normalized) const
 {
 
@@ -3243,8 +3300,10 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
         }
         
 
-        float counts_max;
-        float counts_min;
+        // Seeded so the two branches below are not the only thing standing between an unknown
+        // contrast_limits string and uninitialized reads, now that the legend labels print them.
+        float counts_max = 0.0f;
+        float counts_min = 0.0f;
         // show normalized by mass calib curve
         if (props.normalizer != nullptr && props.calib_curve != nullptr)
         {
@@ -3405,11 +3464,24 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
             image = image.mirrored(false, true);
         }
 
+        QImage rgb_image = image.convertToFormat(QImage::Format_RGB32);
+
+        if (cm_ledgend > 0)
+        {
+            // Label the ends of the colormap strip with the values the color scale actually maps.
+            // Drawn here, after the mirror and the RGB conversion, so the glyphs are not flipped
+            // and are not quantized down to the 256 entry color table. invert_y mirrors the strip
+            // along with the image, so the bright end - and with it the max - moves to the bottom.
+            int startH = height * .1;
+            int endH = height - startH;
+            rgb_image = draw_legend_labels(rgb_image, image.colorTable(), width + cm_ledgend, startH, endH, counts_min, counts_max, props.invert_y);
+        }
+
         //end = std::chrono::system_clock::now();
         //std::chrono::duration<double> elapsed_seconds = end - start;
         //logI << "=-=-=-=-=-=- Total elapsed time: " << elapsed_seconds.count() << "s =-=-=-=-=-=-=-\n" << std::endl; //endl will flush the print.
-       
-        return image.convertToFormat(QImage::Format_RGB32);
+
+        return rgb_image;
     }
 
     return QImage();
