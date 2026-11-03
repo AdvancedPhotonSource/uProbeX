@@ -352,7 +352,8 @@ void FitSpectraWidget::on_braching_ratio_update(data_struct::Fit_Element_Map<dou
 {
     if (element != nullptr)
     {
-        _spectra_widget->set_element_lines(element);
+        double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+        _spectra_widget->set_element_lines(element, incident_energy);
     }
 }
 
@@ -918,7 +919,7 @@ void FitSpectraWidget::del_element()
                     }
                 }
             }
-			_spectra_widget->set_element_lines(nullptr);
+			_spectra_widget->set_element_lines(nullptr, 0);
             auto p = i.parent();
             if(false == p.isValid())
             {	
@@ -1306,7 +1307,8 @@ void FitSpectraWidget::element_selection_changed_from(QModelIndex current, QMode
     {
         if(is_parent)
         {
-            _spectra_widget->set_element_lines(out_element);
+            double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+            _spectra_widget->set_element_lines(out_element, incident_energy);
         }
         else // is element line, show ROI width instead 
         {
@@ -1350,7 +1352,8 @@ void FitSpectraWidget::element_selection_changed(int index)
     }
 
     em.init_energy_ratio_for_detector_element(data_struct::Element_Info_Map<double>::inst()->get_element(_detector_element));
-    _spectra_widget->set_element_lines(&em);
+    double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+    _spectra_widget->set_element_lines(&em, incident_energy);
 }
 
 //---------------------------------------------------------------------------

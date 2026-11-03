@@ -461,7 +461,7 @@ void SpectraWidget::set_vertical_line(qreal center, QString label)
 
 //---------------------------------------------------------------------------
 
-void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* element)
+void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* element, double incident_energy)
 {
 	//clear old one
 	for (QLineSeries* itr : _element_lines)
@@ -481,6 +481,7 @@ void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* elem
 
     if(element != nullptr)
     {
+        int idx = 0;
         const std::vector<data_struct::Element_Energy_Ratio<double>>& energy_ratios = element->energy_ratios();
         for(auto& itr : energy_ratios)
         {
@@ -521,6 +522,11 @@ void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* elem
                 pen.setColor(QColor::fromRgb(LINE_M_R, LINE_M_G, LINE_M_B));
                 break;
             }
+            if(false == element->check_binding_energy(incident_energy,idx))
+            {
+                pen.setColor(QColor::fromRgb(128,128,128));
+            }
+            idx++;
 
             line->setPen(pen);
             line->append(itr.energy, line_min);
