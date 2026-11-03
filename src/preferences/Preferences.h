@@ -145,7 +145,7 @@
 #define STR_PFR_SELECTED_ELEMENTS "Selected_Elements"
 #define STR_PREF_SAVED_CONTRAST "Saved_Contrast"
 #define STR_PRF_ScaleBarVisible "ScaleBarVisible"
-
+#define STR_PFR_SHOW_ELEMENT_RATIOS "ShowElementRatios"
 
 /**
  * @brief Read and save preferences between application restarts, the vaule key

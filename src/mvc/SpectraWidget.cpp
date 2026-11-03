@@ -532,20 +532,26 @@ void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* elem
             line->append(itr.energy, line_min);
             //float line_ratio = data_struct::Element_Param_Percent_Map.at(itr.ptype);
             float line_ratio = itr.ratio;
-			if (itr.ratio == 0)
-			{
-				line->append(itr.energy, (line_min));
-			}
-			else
-			{
-                // Line height is the branching-ratio fraction of the current
-                // display max. When the log10 axis is active it naturally
-                // compresses this value so the line follows the log scale; on
-                // the linear axis it stays linear (the previous behavior).
-                float line_height = line_max * line_ratio;
-				line->append(itr.energy, line_height);
-			}
-		
+            if (itr.ratio == 0)
+            {
+              line->append(itr.energy, (line_min));
+            }
+            else
+            {
+                      // Line height is the branching-ratio fraction of the current
+                      // display max. When the log10 axis is active it naturally
+                      // compresses this value so the line follows the log scale; on
+                      // the linear axis it stays linear (the previous behavior).
+
+                      bool show_element_line_ratios = Preferences::inst()->getValue(STR_PFR_SHOW_ELEMENT_RATIOS).toBool();
+                      float line_height = line_max;
+                      if(show_element_line_ratios)
+                      {
+                        line_height = line_max * line_ratio;
+                      }
+                      line->append(itr.energy, line_height);
+            }
+      
             QString eName = QString(data_struct::Element_Param_Str_Map.at(itr.ptype).c_str());
 
             line->setName(eName);

@@ -34,6 +34,7 @@ void SpectraWidgetSettingsDialog::createLayout()
     bool fit_int_nnls = Preferences::inst()->getValue(STR_PFR_SHOW_FIT_INT_NNLS).toBool();
     bool max_chan = Preferences::inst()->getValue(STR_PFR_SHOW_MAX_CHAN_SPEC).toBool();
     bool black_bg = Preferences::inst()->getValue(STR_PFR_SPECTRA_BLACK_BG).toBool();
+    bool show_element_ratios = Preferences::inst()->getValue(STR_PFR_SHOW_ELEMENT_RATIOS).toBool();
     
     _chkLog10 = new QCheckBox("Display Y axis in Log10");
     _chkLog10->setChecked(log10);
@@ -47,8 +48,8 @@ void SpectraWidgetSettingsDialog::createLayout()
     _chkMax_Chan->setChecked(max_chan);
     _chkSpec_Blk_Bg = new QCheckBox("Show Background as black");
     _chkSpec_Blk_Bg->setChecked(black_bg);
-
-    
+    _chkSpec_show_element_ratios = new QCheckBox("Show element line branching ratios");
+    _chkSpec_show_element_ratios->setChecked(show_element_ratios);
 
     QVBoxLayout* chklayout = new QVBoxLayout();
     chklayout->addWidget(_chkLog10);
@@ -57,6 +58,7 @@ void SpectraWidgetSettingsDialog::createLayout()
     chklayout->addWidget(_chkFit_Int_NNLS);
     chklayout->addWidget(_chkMax_Chan);
     chklayout->addWidget(_chkSpec_Blk_Bg);
+    chklayout->addWidget(_chkSpec_show_element_ratios);
 
 
     _btn_accept = new QPushButton("Accept");
@@ -88,6 +90,8 @@ void SpectraWidgetSettingsDialog::onAccepted()
     Preferences::inst()->setValue(STR_PFR_SHOW_FIT_INT_NNLS, _chkFit_Int_NNLS->isChecked());
     Preferences::inst()->setValue(STR_PFR_SHOW_MAX_CHAN_SPEC, _chkMax_Chan->isChecked());
     Preferences::inst()->setValue(STR_PFR_SPECTRA_BLACK_BG, _chkSpec_Blk_Bg->isChecked());
+    Preferences::inst()->setValue(STR_PFR_SHOW_ELEMENT_RATIOS, _chkSpec_show_element_ratios->isChecked());
+
     Preferences::inst()->save();
 	close();
 }

@@ -448,6 +448,23 @@ void FitSpectraWidget::onSettingsDialog()
                 _spectra_widget->remove_spectra(QString(itr.first.c_str()));
             }
         }
+
+        // redraw the element lines for the currently selected element, if any
+        QModelIndex current_idx = _fit_elements_table->selectionModel()->currentIndex();
+        if (current_idx.isValid())
+        {
+            data_struct::Fit_Element_Map<double>* out_element = nullptr;
+            QString out_name;
+            bool is_parent = false;
+            if (_fit_elements_table_model->getElementByIndex(current_idx, &out_element, out_name, is_parent))
+            {
+                if (out_element != nullptr)
+                {
+                    double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+                    _spectra_widget->set_element_lines(out_element, incident_energy);
+                }
+            }
+        }
     }
 }
 
