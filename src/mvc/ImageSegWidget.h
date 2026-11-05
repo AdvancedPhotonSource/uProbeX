@@ -8,6 +8,7 @@
 
 //---------------------------------------------------------------------------
 
+#include <QPointer>
 #include <gstar/AbstractImageWidget.h>
 #include "gstar/Annotation/RoiMaskGraphicsItem.h"
 
@@ -87,7 +88,13 @@ private:
 
     bool _first_pixmap_set;
 
-    gstar::RoiMaskGraphicsItem* _selected_roi;
+    /**
+     * The tree model owns the roi items and deletes them on clearAll() / deleteAllItems(), so a
+     * raw pointer here goes stale without warning and every "!= nullptr" guard below it silently
+     * passes. RoiMaskGraphicsItem is a QGraphicsObject, so QPointer resets itself on destruction
+     * and those guards become correct.
+     */
+    QPointer<gstar::RoiMaskGraphicsItem> _selected_roi;
 
     QSize _roi_brush_size;
 

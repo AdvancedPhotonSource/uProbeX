@@ -38,6 +38,7 @@ ImageSegRoiDialog::ImageSegRoiDialog() : QDialog()
 
 	onFirst = true;
 	_model = nullptr;
+	_selected_colormap = nullptr;
 
 	_color_map.insert({ 0, QColor(Qt::red) });
 	_color_map.insert({ 1, QColor(Qt::green) });
@@ -71,6 +72,25 @@ ImageSegRoiDialog::ImageSegRoiDialog() : QDialog()
 ImageSegRoiDialog::~ImageSegRoiDialog()
 {
 
+}
+
+//---------------------------------------------------------------------------
+
+QColor ImageSegRoiDialog::_color_at(int idx) const
+{
+	if (_color_map.empty())
+	{
+		return QColor(Qt::red);
+	}
+	const int size = static_cast<int>(_color_map.size());
+	// idx can arrive negative only through a programming error, but wrap defensively rather than
+	// hand std::map::at a key it does not have.
+	int wrapped = idx % size;
+	if (wrapped < 0)
+	{
+		wrapped += size;
+	}
+	return _color_map.at(wrapped);
 }
 
 //---------------------------------------------------------------------------
@@ -450,9 +470,14 @@ void ImageSegRoiDialog::setModel(std::shared_ptr<MapsH5Model> model)
 void ImageSegRoiDialog::_run_kmeans()
 {
 	ArrayXXr<float> int_img;
-	_get_img(int_img, _chk_normalize_sum->isChecked());
-	
-	cv::KmeansFlags flags;
+	if (false == _get_img(int_img, _chk_normalize_sum->isChecked()))
+	{
+		// Nothing checked: int_img is 0x0 and the cv::Mat below would wrap a null pointer.
+		QMessageBox::information(nullptr, "ImageSegROIDialog", "Select at least one image first.");
+		return;
+	}
+
+	cv::KmeansFlags flags = cv::KMEANS_RANDOM_CENTERS;
 	cv::TermCriteria crit;
 	if (_km_TermCriteria->currentIndex() == 0)
 	{
@@ -498,12 +523,7 @@ void ImageSegRoiDialog::_run_kmeans()
 
 	for (int i = 0; i < clusterCount; i++)
 	{
-		int color_idx = i;
-		if (color_idx > _color_map.size())
-		{
-			color_idx = color_idx % _color_map.size();
-		}
-		QColor color_data = _color_map[color_idx];
+		QColor color_data = _color_at(i);
 		_next_color++;
 		gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(new_labels, i, color_data);
 		_int_img_widget->addRoiMask(roi);
@@ -518,7 +538,10 @@ void ImageSegRoiDialog::_run_ratios()
 	{
 
 		ArrayXXr<float> int_img;
-		_get_img(int_img, _chk_normalize_sum->isChecked());
+		if (false == _get_img(int_img, _chk_normalize_sum->isChecked()))
+		{
+			throw std::invalid_argument("Select at least one image first.");
+		}
 		float perc = _rat_percent->text().toFloat();
 		logI<<" height :"<<int_img.rows()<< "pheight: " <<int_img.rows() * perc <<" width : "<<int_img.cols()<<" pwidth : "<<int_img.cols() * perc<<"\n";
 
@@ -589,12 +612,7 @@ void ImageSegRoiDialog::_run_ratios()
 		int totalROIs= max_idx +1;
 		for (int i = 0; i < totalROIs; i++)
 		{
-			int color_idx = i;
-			if (color_idx > _color_map.size())
-			{
-				color_idx = color_idx % _color_map.size();
-			}
-			QColor color_data = _color_map[color_idx];
+			QColor color_data = _color_at(i);
 			_next_color++;
 			gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(maskMat, i, color_data);
 			_int_img_widget->addRoiMask(roi);
@@ -773,7 +791,7 @@ void ImageSegRoiDialog::onClose()
 
 void ImageSegRoiDialog::onNewROI()
 {
-	QColor color_data = _color_map[_next_color];
+	QColor color_data = _color_at(_next_color);
 	ArrayXXr<float> int_img;
 	if (_get_img(int_img, _chk_normalize_sum->isChecked()))
 	{
@@ -1024,6 +1042,11 @@ void ImageSegRoiDialog::onImgSelection(QStandardItem* item)
 
 	if (is_checked)
 	{
+		if (_selected_colormap == nullptr)
+		{
+			logW << "No colormap set, call setColorMap() before showing this dialog.\n";
+			return;
+		}
 		_int_img_widget->setImageFromArray(int_img, *_selected_colormap, onFirst);
 		onFirst = false;
 	}
@@ -1064,6 +1087,12 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
         }
         data_struct::Fit_Element_Map_Dict<double> elements_to_model = po->elements_to_fit;
 		data_struct::Fit_Parameters<double> fit_params = po->fit_params;
+
+        // elements_to_model starts as a copy of pointers owned by po, and the loop below adds
+        // elements we allocate ourselves. Deleting everything in the dict at the end would
+        // double free po's entries, so only the ones created here are owned, by this vector. It
+        // must outlive every use of elements_to_model, including the early returns below.
+        std::vector<std::unique_ptr<data_struct::Fit_Element_Map<double>>> owned_elements;
 
         if(fit_params.size() == 0)
         {
@@ -1114,9 +1143,10 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                         Element_Info<double>* eptr = Element_Info_Map<double>::inst()->get_element(itr.first);
                         if(eptr != nullptr)
                         {
-                            data_struct::Fit_Element_Map<double>* em = new data_struct::Fit_Element_Map<double>(itr.first, eptr);
+                            auto em = std::make_unique<data_struct::Fit_Element_Map<double>>(itr.first, eptr);
                             em->init_energy_ratio_for_detector_element(data_struct::Element_Info_Map<double>::inst()->get_element("Si")); // don't know how to look up
-                            elements_to_model[itr.first] = em;
+                            elements_to_model[itr.first] = em.get();
+                            owned_elements.push_back(std::move(em));
                         }
                         else
                         {
@@ -1163,13 +1193,7 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                     else
                     {
                         logW<<"Pixel out of range!\n";
-                        // clean up
-                        /*
-                        for(auto &em_itr : elements_to_model)
-                        {
-                            delete em_itr.second;
-                        }
-                          */  
+                        // owned_elements cleans up what this function allocated.
                         return;
                     }
                 }
@@ -1216,13 +1240,7 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
 				_pb_pixels->setValue(i);
 				QCoreApplication::processEvents();
             }
-            // clean up
-            /*
-            for(auto &em_itr : elements_to_model)
-            {
-                delete em_itr.second;
-            }
-                */
+            // owned_elements cleans up what this function allocated.
 			_pb_pixels->setValue(pixel_list.size());
 			QCoreApplication::processEvents();
         }

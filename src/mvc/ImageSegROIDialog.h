@@ -106,6 +106,13 @@ protected:
 
 	void _model_custom_spectra(const std::string& analysis_name, const std::vector<std::pair<int, int>>& pixel_list, ArrayDr* spec);
 
+	/**
+	 * Wraps idx into the fixed palette. Never index _color_map with operator[]: on a miss it
+	 * inserts a default constructed (invalid) QColor, which both leaves the roi with no color and
+	 * grows the map, breaking the wrap for every roi after it.
+	 */
+	QColor _color_at(int idx) const;
+
 	QWidget* _createKMeansLayout();
 
 	QWidget* _createRatioLayout();

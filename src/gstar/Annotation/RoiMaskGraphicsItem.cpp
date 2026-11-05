@@ -217,9 +217,9 @@ void RoiMaskGraphicsItem::add_to_roi(QPointF pos)
     int x = (int)pos.x() / _render_scale;
     int y = (int)pos.y() / _render_scale;
 
-    if (x > -1 && x <= _mask->width())
+    if (x > -1 && x < _mask->width())
     {
-        if (y > -1 && y <= _mask->height())
+        if (y > -1 && y < _mask->height())
         {
             int xsize = x + _brush_size.width();
             if (xsize > _mask->width())
@@ -302,9 +302,9 @@ void RoiMaskGraphicsItem::erase_from_roi(QPointF pos)
     // Scene position in image pixels -> the measurement under it.
     int x = (int)pos.x() / _render_scale;
     int y = (int)pos.y() / _render_scale;
-    if (x > -1 && x <= _mask->width())
+    if (x > -1 && x < _mask->width())
     {
-        if (y > -1 && y <= _mask->height())
+        if (y > -1 && y < _mask->height())
         {
             int xsize = x + _brush_size.width();
             if (xsize > _mask->width())
