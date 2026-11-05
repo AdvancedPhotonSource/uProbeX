@@ -58,6 +58,7 @@ MapsElementsWidget::MapsElementsWidget(int rows, int cols, bool compact_view, bo
     _model = nullptr;
     _normalizer = nullptr;
     _calib_curve = nullptr;
+    _restoring_view_labels = false;
 
     // Heat colormap stops: black -> red -> orange -> yellow -> white
     static const int heat_stops[][3] = {
@@ -499,6 +500,64 @@ void MapsElementsWidget::savePref()
         Preferences::inst()->setValue(mItr.first+"_floating", mItr.second->isFloating());
         Preferences::inst()->setValue(mItr.first + "_geometry", mItr.second->saveGeometry());
     }
+}
+
+//---------------------------------------------------------------------------
+
+void MapsElementsWidget::_save_grid_selection()
+{
+    // The compact view has one combobox for the whole grid and already saves its ordered list
+    // under STR_PFR_SELECTED_ELEMENTS, so there is no per-view selection to record here.
+    if (_restoring_view_labels || isCompactView())
+    {
+        return;
+    }
+
+    QStringList itemList;
+    for (const QString& itr : m_imageViewWidget->getLabelList())
+    {
+        itemList.append(itr);
+    }
+
+    // A grid of empty comboboxes means no dataset is loaded. Writing that out would wipe the
+    // selection the user is about to come back to.
+    bool any_set = false;
+    for (const QString& itr : itemList)
+    {
+        if (itr.length() > 0)
+        {
+            any_set = true;
+            break;
+        }
+    }
+    if (false == any_set)
+    {
+        return;
+    }
+
+    // Keep whatever was saved for views beyond the current grid size. Shrinking to a 1x1, picking
+    // a map and going back to 3x3 would otherwise lose the other eight selections, since only the
+    // one visible view can report itself here.
+    const QStringList prev = Preferences::inst()->getValue(STR_PFR_GRID_SELECTED_ELEMENTS).toStringList();
+    for (int i = itemList.size(); i < prev.size(); i++)
+    {
+        itemList.append(prev.at(i));
+    }
+
+    Preferences::inst()->setValue(STR_PFR_GRID_SELECTED_ELEMENTS, itemList);
+    Preferences::inst()->save();
+}
+
+//---------------------------------------------------------------------------
+
+std::vector<QString> MapsElementsWidget::_load_grid_selection() const
+{
+    std::vector<QString> saved;
+    for (const QString& itr : Preferences::inst()->getValue(STR_PFR_GRID_SELECTED_ELEMENTS).toStringList())
+    {
+        saved.push_back(itr);
+    }
+    return saved;
 }
 
 //---------------------------------------------------------------------------
@@ -949,6 +1008,10 @@ void MapsElementsWidget::onElementSelect(QString name, int viewIdx)
             displayCounts(analysisName.toStdString(), name.toStdString(), _chk_log_color->isChecked(), viewIdx);
         }
     }
+
+    // Only reached for a real combobox change once the grid is built, so this is the user
+    // picking a map for a view. Record it so the layout comes back on the next run.
+    _save_grid_selection();
 }
 
 //---------------------------------------------------------------------------
@@ -1316,12 +1379,19 @@ void MapsElementsWidget::on_export_fit_params(data_struct::Fit_Parameters<double
 
 void MapsElementsWidget::model_updated()
 {
+    // Everything below tears down and rebuilds the view comboboxes, which emits
+    // currentTextChanged for each of them as it goes. onElementSelect() must not write a half
+    // built grid back over the saved selection while that happens, so the flag covers the whole
+    // rebuild, including the clearLabels() inside _clear_model_bindings().
+    _restoring_view_labels = true;
+
     // Runs before the early return below on purpose, the previous dataset has to be released
     // whether or not there is a new one to show.
     _clear_model_bindings();
 
     if(_model == nullptr)
     {
+        _restoring_view_labels = false;
         return;
     }
 
@@ -1401,8 +1471,28 @@ void MapsElementsWidget::model_updated()
     data_struct::Fit_Count_Dict<float> element_counts;
     _model->getAnalyzedCounts(current_a, element_counts);
 
-    const std::vector<QString> element_view_list = m_imageViewWidget->getLabelList();
-    
+    std::vector<QString> element_view_list = m_imageViewWidget->getLabelList();
+
+    if (false == isCompactView())
+    {
+        // Nothing is on screen to carry over: either this is the first dataset since startup or
+        // the grid was just rebuilt by onNewGridLayout(). Seed from the saved per-view selection
+        // so the user's layout comes back instead of the first n maps in the dataset.
+        bool any_on_screen = false;
+        for (const QString& itr : element_view_list)
+        {
+            if (itr.length() > 0)
+            {
+                any_on_screen = true;
+                break;
+            }
+        }
+        if (false == any_on_screen)
+        {
+            element_view_list = _load_grid_selection();
+        }
+    }
+
     // get copy of elements to add the ones that were missed, usually pileups
     data_struct::Fit_Count_Dict<float> element_counts_not_added;
     _model->getAnalyzedCounts(current_a, element_counts_not_added);
@@ -1498,6 +1588,10 @@ void MapsElementsWidget::model_updated()
             m_imageViewWidget->addLabel(val);
         }
     }
+
+    // Grid is fully built now, so changes from here on are the user's and worth saving.
+    _restoring_view_labels = false;
+
     m_imageWidgetToolBar->clickFill();
 
 

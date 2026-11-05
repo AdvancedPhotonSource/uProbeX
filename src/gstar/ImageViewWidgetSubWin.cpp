@@ -5,6 +5,7 @@
 
 #include "gstar/ImageViewWidgetSubWin.h"
 #include <QSpacerItem>
+#include <QSet>
 #include <cmath>
 using namespace gstar;
 
@@ -856,33 +857,57 @@ std::vector<QString> ImageViewWidgetSubWin::getLabelList()
 
 void ImageViewWidgetSubWin::restoreLabels(const std::vector<QString>& labels)
 {
+    const int win_cnt = (int)_sub_windows.size();
+    const int label_cnt = (int)labels.size();
 
-    for(int i=0; i< _sub_windows.size(); i++)
+    // Two passes on purpose. Assigning a fallback as soon as a view comes up empty lets that
+    // fallback claim a map that a later view was actually asking for, so every label that still
+    // exists in this dataset is placed first and only then are the gaps filled.
+    std::vector<bool> resolved(win_cnt, false);
+    QSet<QString> taken;
+
+    for(int i = 0; i < win_cnt; i++)
     {
-        bool found = false;
         QComboBox* cb = _sub_windows[i].cb_image_label;
-        if(i < labels.size())
+        if(i < label_cnt && labels[i].length() > 0 && cb->findText(labels[i]) > -1)
         {
-            QString ilabel = labels[i];
-            for(int j=0; j < cb->count(); j++)
-            {
-                if(cb->itemText(j) == ilabel)
-                {
-                    cb->setCurrentText(ilabel);
-                    found = true;
-                    break;
-                }
-            }
+            cb->setCurrentText(labels[i]);
+            taken.insert(labels[i]);
+            resolved[i] = true;
         }
-        if(false == found)
+    }
+
+    for(int i = 0; i < win_cnt; i++)
+    {
+        if(resolved[i])
         {
-            int cnt = cb->count();
-            if(i < cnt)
-            {
-                cb->setCurrentText(cb->itemText(i));
-            }
+            continue;
         }
 
+        QComboBox* cb = _sub_windows[i].cb_image_label;
+        // This view's map is not in the dataset that was just opened, so fall forward to the
+        // first one no other view has, otherwise opening a workspace that is missing a couple of
+        // elements comes up showing the same map in several cells.
+        QString pick;
+        for(int j = 0; j < cb->count(); j++)
+        {
+            if(false == taken.contains(cb->itemText(j)))
+            {
+                pick = cb->itemText(j);
+                break;
+            }
+        }
+        if(pick.length() == 0 && cb->count() > 0)
+        {
+            // More views than the dataset has maps, so duplicates are unavoidable; keep the old
+            // by index behavior rather than leaving the cell blank.
+            pick = cb->itemText(i < cb->count() ? i : cb->count() - 1);
+        }
+        if(pick.length() > 0)
+        {
+            cb->setCurrentText(pick);
+            taken.insert(pick);
+        }
     }
 }
 
