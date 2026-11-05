@@ -571,27 +571,47 @@ bool AnnotationTreeModel::removeRow(int row,
    
     if (pItem == m_root)
     {
-        //this is a group item, delete all the children under it
-        QModelIndex parentIndex = index(item->row(), 0, QModelIndex());
-        count = item->childCount();
-        beginRemoveRows(parentIndex, row, row + count - 1);
-
-        QString classIdName;
-        for (int i = count - 1; i >= 0; i--)
+        // Removing a whole group is two structural changes under two different parents: the
+        // children go away under the group, then the group row goes away under the root. They
+        // need separate begin/endRemoveRows pairs. Announcing only the first one left the views
+        // and the selection model holding persistent indexes to the freed group node, which they
+        // later dereference through QModelIndex::internalPointer().
+        const int groupRow = item->row();
+        if (groupRow < 0)
         {
-            AbstractGraphicsItem* cItem = item->child(0);
-            if (cItem != nullptr)
-            {
-                classIdName = cItem->classId();
-                item->removeChildAt(0);
-                delete cItem;
-            }
+            return false;
         }
-        
-        m_root->removeChildAt(item->row());
+
+        // The group node is an EmptyGraphicsItem, so its own classId() is not the roi classId
+        // that keys m_groups. Look the key up by value instead of reading it off a child, which
+        // leaves a stale m_groups entry pointing at freed memory when the group is already empty.
+        QString classIdName = m_groups.key(item);
+
+        count = item->childCount();
+        if (count > 0)
+        {
+            const QModelIndex groupIndex = index(groupRow, 0, QModelIndex());
+            beginRemoveRows(groupIndex, 0, count - 1);
+            for (int i = count - 1; i >= 0; i--)
+            {
+                AbstractGraphicsItem* cItem = item->child(0);
+                if (cItem != nullptr)
+                {
+                    if (classIdName.isEmpty())
+                    {
+                        classIdName = cItem->classId();
+                    }
+                    item->removeChildAt(0);
+                    delete cItem;
+                }
+            }
+            endRemoveRows();
+        }
+
+        beginRemoveRows(QModelIndex(), groupRow, groupRow);
+        m_root->removeChildAt(groupRow);
         m_groups.remove(classIdName);
         delete item;
-        
         endRemoveRows();
 
         emit deleteAll(classIdName);
@@ -606,9 +626,8 @@ bool AnnotationTreeModel::removeRow(int row,
         }
 
         // Indicate beginning of removal
-        //beginRemoveRows(QModelIndex(), row, row + count - 1);
-        //QModelIndex parentIndex = createIndex(pItem->row(), 0, pItem);
-        QModelIndex parentIndex = index(pItem->row(), 0, QModelIndex());
+        const int groupRow = pItem->row();
+        QModelIndex parentIndex = index(groupRow, 0, QModelIndex());
         beginRemoveRows(parentIndex, row, row + count - 1);
 
         pItem->removeChildAt(row);
@@ -620,16 +639,20 @@ bool AnnotationTreeModel::removeRow(int row,
             emit deletedNode(classIdName, name_var.toString());
         }
         delete item;
-
-        
-        if (pItem->childCount() == 0)
-        {
-            m_root->removeChildAt(pItem->row());
-            m_groups.remove(classIdName);
-            delete pItem;
-        }
         // Indicate end of removal
         endRemoveRows();
+
+        // Dropping the group that just went empty is a second structural change, this time under
+        // the root, so it needs its own pair. Folding it into the one above left the views with
+        // persistent indexes to the freed group node.
+        if (pItem->childCount() == 0 && groupRow > -1)
+        {
+            beginRemoveRows(QModelIndex(), groupRow, groupRow);
+            m_root->removeChildAt(groupRow);
+            m_groups.remove(classIdName);
+            delete pItem;
+            endRemoveRows();
+        }
     }
     return true;
 
