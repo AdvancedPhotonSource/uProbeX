@@ -172,30 +172,30 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
         _cb_colormap->addItem(itr.first);
     }
 
-    _color_map_ledgend_lbl = new QLabel();
-    _color_maps_ledgend = QImage(256, 10, QImage::Format_Indexed8);
-    _color_maps_ledgend.setColorTable(_gray_colormap);
+    _color_map_legend_lbl = new QLabel();
+    _color_maps_legend = QImage(256, 10, QImage::Format_Indexed8);
+    _color_maps_legend.setColorTable(_gray_colormap);
     for (uint c = 0; c < 256; c++)
     {
         for (int r = 0; r < 10; r++)
         {
-            _color_maps_ledgend.setPixel(c, r, c);
+            _color_maps_legend.setPixel(c, r, c);
         }
     }
 
-    _color_map_ledgend_lbl->setPixmap(QPixmap::fromImage(_color_maps_ledgend.convertToFormat(QImage::Format_RGB32)));
+    _color_map_legend_lbl->setPixmap(QPixmap::fromImage(_color_maps_legend.convertToFormat(QImage::Format_RGB32)));
 
-    _chk_disp_color_ledgend = new QCheckBox("Display Color Ledgend");
-    _chk_disp_color_ledgend->setChecked(Preferences::inst()->getValue(STR_DISPLAY_COLOR_LEDGEND).toBool());
-    connect(_chk_disp_color_ledgend, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_log_color_changed);
+    _chk_disp_color_legend = new QCheckBox("Display Color Legend");
+    _chk_disp_color_legend->setChecked(Preferences::inst()->getValue(STR_DISPLAY_COLOR_LEGEND).toBool());
+    connect(_chk_disp_color_legend, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_log_color_changed);
 
     QWidget* color_maps_widgets = new QWidget();
     QHBoxLayout* colormapsHBox = new QHBoxLayout();
     colormapsHBox->setContentsMargins(0, 0, 0, 0);
     colormapsHBox->addWidget(new QLabel(" ColorMap :"));
     colormapsHBox->addWidget(_cb_colormap);
-    colormapsHBox->addWidget(_color_map_ledgend_lbl);
-    colormapsHBox->addWidget(_chk_disp_color_ledgend);
+    colormapsHBox->addWidget(_color_map_legend_lbl);
+    colormapsHBox->addWidget(_chk_disp_color_legend);
     color_maps_widgets->setLayout(colormapsHBox);
 
     _chk_log_color = new QCheckBox("Log scale");
@@ -649,7 +649,7 @@ void MapsElementsWidget::onGridDialog()
 void MapsElementsWidget::on_log_color_changed(int state)
 {
     Preferences::inst()->setValue(STR_LOG_SCALE_COLOR, _chk_log_color->isChecked());
-    Preferences::inst()->setValue(STR_DISPLAY_COLOR_LEDGEND, _chk_disp_color_ledgend->isChecked());
+    Preferences::inst()->setValue(STR_DISPLAY_COLOR_LEGEND, _chk_disp_color_legend->isChecked());
     redrawCounts();
 }
 
@@ -968,7 +968,7 @@ void MapsElementsWidget::checkColormapSelect(QString colormap)
     else
     {
         _selected_colormap = ColorMap::inst()->get_color_map(colormap);
-        // The ledgend and the count images are indexed 8 bit, so anything that does not cover all
+        // The legend and the count images are indexed 8 bit, so anything that does not cover all
         // 256 indices would be read past the end of when converting to rgb.
         if (_selected_colormap == nullptr || _selected_colormap->size() != 256)
         {
@@ -981,8 +981,8 @@ void MapsElementsWidget::checkColormapSelect(QString colormap)
             Preferences::inst()->setValue(STR_COLORMAP, colormap);
         }
     }
-    _color_maps_ledgend.setColorTable(*_selected_colormap);
-    _color_map_ledgend_lbl->setPixmap(QPixmap::fromImage(_color_maps_ledgend.convertToFormat(QImage::Format_RGB32)));
+    _color_maps_legend.setColorTable(*_selected_colormap);
+    _color_map_legend_lbl->setPixmap(QPixmap::fromImage(_color_maps_legend.convertToFormat(QImage::Format_RGB32)));
 }
 
 //---------------------------------------------------------------------------
@@ -1846,7 +1846,7 @@ GenerateImageProp MapsElementsWidget::generate_image_props(const std::string ana
     props.normalizer = _normalizer;
     props.calib_curve = _calib_curve;
     props.contrast_limits = _contrast_widget->get_contrast_limits();
-    props.show_legend = _chk_disp_color_ledgend->isChecked();
+    props.show_legend = _chk_disp_color_legend->isChecked();
     props.invert_y = _chk_invert_y->isChecked();
     props.global_contrast = _contrast_widget->is_global_contrast_checked();
     if (props.global_contrast)

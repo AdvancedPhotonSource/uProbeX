@@ -106,7 +106,7 @@
 #define STR_COLORMAP_HEAT "Heatmap"
 #define STR_RECENT_MAPS_WORKSPACES "Recent_MAPS_Workspaces"
 #define STR_LOG_SCALE_COLOR "Color_Scale_Log"
-#define STR_DISPLAY_COLOR_LEDGEND "Display_Color_Ledgend"
+#define STR_DISPLAY_COLOR_LEGEND "Display_Color_Legend"
 #define STR_INVERT_Y_AXIS "Invert_Y_Axis"
 #define STR_PFR_THEME "Theme"
 #define STR_PFR_SPECTRA_BLACK_BG "SPECTRA_BLACK_BG"

@@ -94,7 +94,7 @@ void Preferences::_clear_map()
         {STR_COLORMAP_HEAT, QVariant()},
         {STR_RECENT_MAPS_WORKSPACES, QVariant()},
         {STR_LOG_SCALE_COLOR, QVariant()},
-        {STR_DISPLAY_COLOR_LEDGEND, QVariant()},
+        {STR_DISPLAY_COLOR_LEGEND, QVariant()},
         {STR_INVERT_Y_AXIS, QVariant()},
         {STR_PFR_THEME, QVariant()},
         {STR_PFR_SPECTRA_BLACK_BG, QVariant()},

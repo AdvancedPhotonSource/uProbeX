@@ -208,7 +208,7 @@ protected:
 
    QCheckBox* _chk_log_color;
 
-   QCheckBox* _chk_disp_color_ledgend;
+   QCheckBox* _chk_disp_color_legend;
 
    QCheckBox* _chk_invert_y;
 
@@ -218,9 +218,9 @@ protected:
 
    QWidget* _counts_window;
 
-   QImage _color_maps_ledgend;
+   QImage _color_maps_legend;
 
-   QLabel *_color_map_ledgend_lbl;
+   QLabel *_color_map_legend_lbl;
 
    QuantificationWidget* _quant_widget;
 
