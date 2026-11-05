@@ -202,7 +202,7 @@ void LiveMapsElementsWidget::updateIp()
 
 //---------------------------------------------------------------------------
 
-void LiveMapsElementsWidget::newDataArrived(data_struct::Stream_Block<float>* new_packet)
+void LiveMapsElementsWidget::newDataArrived(data_struct::Stream_Block_Ptr<float> new_packet)
 {
 	if (new_packet == nullptr)
 	{
@@ -249,7 +249,7 @@ void LiveMapsElementsWidget::newDataArrived(data_struct::Stream_Block<float>* ne
             disconnect(_currentModel.get(),&MapsH5Model::model_data_updated,_mapsElementsWidget,&MapsElementsWidget::model_updated);
         }
         _currentModel = std::make_shared<MapsH5Model>();
-        _currentModel->initialize_from_stream_block(new_packet);
+        _currentModel->initialize_from_stream_block(new_packet.get());
         _progressBar->setRange(0, new_packet->height() - 1);
         _maps_h5_models.push_back(_currentModel);
 
@@ -265,7 +265,7 @@ void LiveMapsElementsWidget::newDataArrived(data_struct::Stream_Block<float>* ne
         }
     }
 
-    _currentModel->update_from_stream_block(new_packet);
+    _currentModel->update_from_stream_block(new_packet.get());
     if(_last_packet != nullptr && _last_packet->row() != new_packet->row())
     {   
         QString str = ">" + QString::number(new_packet->row()) + " " + QString::number(new_packet->col()) + " : " + QString::number(new_packet->height()) + " " + QString::number(new_packet->width()) ;
@@ -278,7 +278,7 @@ void LiveMapsElementsWidget::newDataArrived(data_struct::Stream_Block<float>* ne
         _progressBar->update();
         //cntr = 0;
     }
-    _last_packet.reset(new_packet);
+    _last_packet = new_packet;
 }
 
 //---------------------------------------------------------------------------

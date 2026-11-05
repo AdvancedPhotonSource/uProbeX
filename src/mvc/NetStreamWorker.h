@@ -65,7 +65,7 @@ public slots:
     void run() override
     {
         _running = true;
-        data_struct::Stream_Block<float> *new_packet;
+        data_struct::Stream_Block_Ptr<float> new_packet;
         zmq::message_t token, message;
         zmq::recv_result_t res1, res2;
         unsigned int sleepAtVal = 1;
@@ -159,7 +159,7 @@ public slots:
     void stop() {_running = false;}
 
 signals:
-    void newData(data_struct::Stream_Block<float> *new_packet);
+    void newData(data_struct::Stream_Block_Ptr<float> new_packet);
 
     void newStringData(QString);
 
