@@ -55,6 +55,58 @@ void ImageViewWidget::setRenderScaleAt(int grid_idx, int scale)
 
 //---------------------------------------------------------------------------
 
+void ImageViewWidget::clearRenderScales()
+{
+    _render_scales.clear();
+}
+
+//---------------------------------------------------------------------------
+
+bool ImageViewWidget::pixelPosToDataIndex(const QPointF& pix_pos,
+                                          const QPixmap& pix,
+                                          int data_rows,
+                                          int data_cols,
+                                          int fallback_scale,
+                                          int& out_col,
+                                          int& out_row)
+{
+    if(pix.isNull())
+    {
+        return false;
+    }
+    if(pix_pos.x() < 0.0 || pix_pos.y() < 0.0)
+    {
+        return false;
+    }
+
+    int scale = std::max(1, fallback_scale);
+    // The colorbar strip is appended to the right of the map, so the pixmap height is still a
+    // whole number of measurement blocks and is the reliable place to recover the upscale from.
+    if(data_rows > 0 && pix.height() >= data_rows)
+    {
+        scale = std::max(1, (int)(pix.height() / data_rows));
+    }
+
+    int col = (int)(pix_pos.x()) / scale;
+    int row = (int)(pix_pos.y()) / scale;
+
+    // Past the last column means the cursor is on the colorbar strip, not on the scan.
+    if(data_cols > 0 && col >= data_cols)
+    {
+        return false;
+    }
+    if(data_rows > 0 && row >= data_rows)
+    {
+        return false;
+    }
+
+    out_col = col;
+    out_row = row;
+    return true;
+}
+
+//---------------------------------------------------------------------------
+
 void ImageViewWidget::setCoordsVisible(bool val)
 {
     m_coordWidget->setVisible(val, val, val);

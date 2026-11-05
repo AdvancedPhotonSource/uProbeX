@@ -104,6 +104,21 @@ public:
    virtual bool getUpdatedMinMaxAt(int grid_idx, float &counts_min, float &counts_max);
 
    virtual void updateMinMax(unsigned int idx, const ArrayXXr<float>& normalized);
+
+   /**
+    * Image pixels per measurement for sub window idx, measured off the pixmap that is actually
+    * displayed rather than taken from the stored value. Falls back to renderScaleAt(idx) when
+    * the sub window has no pixmap or no counts array yet.
+    */
+   int effectiveRenderScaleAt(int idx);
+
+   /**
+    * Map a position in sub window idx's scene (which is in pixmap pixels, the scene rect being
+    * the pixmap bounding rect) to a data row/column. False when the position is off the map,
+    * e.g. over the colorbar strip.
+    */
+   bool sceneToDataIndex(int idx, const QPointF& scene_pos, int& out_col, int& out_row);
+
 public slots:
 
    /**

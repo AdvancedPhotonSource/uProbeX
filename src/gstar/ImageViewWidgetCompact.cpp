@@ -337,6 +337,9 @@ void ImageViewWidgetCompact::setUnitLabels(QString label)
 
 void ImageViewWidgetCompact::newGridLayout(int rows, int cols)
 {
+    // The pixmaps these belonged to are about to be destroyed; a leftover scale applied to a new
+    // image would put every pixel-to-motor lookup on the wrong measurement.
+    clearRenderScales();
 
     disconnect(_sub_window.scene, &ImageViewScene::zoomIn, this, &ImageViewWidgetCompact::zoomIn);
     disconnect(_sub_window.scene, &ImageViewScene::zoomInRect, this, &ImageViewWidgetCompact::zoomInRect);
@@ -434,9 +437,57 @@ QRectF ImageViewWidgetCompact::getSceneRect()
 
 //---------------------------------------------------------------------------
 
+bool ImageViewWidgetCompact::cellPosToDataIndex(int cell_idx, const QPointF& local_pos, int& out_col, int& out_row)
+{
+    if(cell_idx < 0 || cell_idx >= (int)_pixmaps.size() || _pixmaps[cell_idx] == nullptr)
+    {
+        return false;
+    }
+
+    int data_rows = 0;
+    int data_cols = 0;
+    auto ditr = _raw_data_items.find(cell_idx);
+    if(ditr != _raw_data_items.end())
+    {
+        data_rows = (int)ditr->second.rows();
+        data_cols = (int)ditr->second.cols();
+    }
+
+    return pixelPosToDataIndex(local_pos, _pixmaps[cell_idx]->pixmap(), data_rows, data_cols, renderScaleAt(cell_idx), out_col, out_row);
+}
+
+//---------------------------------------------------------------------------
+
 void ImageViewWidgetCompact::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
 {
+    if(event == nullptr || m_coordWidget == nullptr)
+    {
+        return;
+    }
 
+    // One scene holds the whole grid here, so the cell under the cursor has to be found first and
+    // the position converted inside it - scenePos() spans every map, not just one.
+    for(size_t i = 0; i < _pixmaps.size(); i++)
+    {
+        ClickablePixmapItem* item = _pixmaps[i];
+        if(item == nullptr)
+        {
+            continue;
+        }
+        QPointF local = item->mapFromScene(event->scenePos());
+        if(false == item->boundingRect().contains(local))
+        {
+            continue;
+        }
+
+        int col = 0;
+        int row = 0;
+        if(cellPosToDataIndex((int)i, local, col, row))
+        {
+            m_coordWidget->setCoordinate(col, row);
+        }
+        return;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -445,14 +496,28 @@ void ImageViewWidgetCompact::onMousePressEvent(QGraphicsSceneMouseEvent* event)
 {
     QGraphicsItem *item = _sub_window.scene->itemAt(event->scenePos(), QTransform());
     ClickablePixmapItem* selectedItem = qgraphicsitem_cast<ClickablePixmapItem*>(item);
-    if (selectedItem) 
+    if (selectedItem)
     {
         QPointF seletionPoint = selectedItem->last_local_intersection_point();
         // The point is in pixmap pixels. gen_image gives each measurement a scale x scale block,
         // so divide back down to land on the measurement the user actually clicked.
-        int scale = renderScaleAt(0);
-        unsigned int r = (unsigned int)seletionPoint.y() / scale;
-        unsigned int c = (unsigned int)seletionPoint.x() / scale;
+        int cell_idx = 0;
+        for(size_t i = 0; i < _pixmaps.size(); i++)
+        {
+            if(_pixmaps[i] == selectedItem)
+            {
+                cell_idx = (int)i;
+                break;
+            }
+        }
+        int ic = 0;
+        int ir = 0;
+        if(false == cellPosToDataIndex(cell_idx, seletionPoint, ic, ir))
+        {
+            return;
+        }
+        unsigned int r = (unsigned int)ir;
+        unsigned int c = (unsigned int)ic;
         if(m_coordWidget->model() != nullptr)
         {
             double outX, outY, outZ;

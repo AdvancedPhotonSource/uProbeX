@@ -158,6 +158,36 @@ public:
 
    void setRenderScaleAt(int grid_idx, int scale);
 
+   /**
+    * Forget every stored render scale. Call this whenever the set of pixmaps is torn down (a new
+    * grid layout, a new dataset) so a scale left over from the previous images cannot be applied
+    * to the new ones.
+    */
+   void clearRenderScales();
+
+   /**
+    * Turn a position in pixmap-pixel space into a data array row/column.
+    *
+    * gen_image() draws each measurement as a scale x scale block of identical pixels so the
+    * colorbar labels baked into the image stay legible, then appends the colorbar strip to the
+    * right of the map. The pixmap is therefore neither 1:1 with the data nor as wide as the map.
+    *
+    * The scale is recovered from the pixmap height and the data row count instead of being read
+    * out of _render_scales: both come from the image actually on screen, so a stale or
+    * never-written entry cannot silently leave the scale at 1 and send every lookup to the same
+    * clamped row/column. fallback_scale is only consulted when the data dimensions are unknown.
+    *
+    * @return false when the position falls outside the map itself - over the colorbar strip, or
+    *         past the last row/column - in which case out_col/out_row are left untouched.
+    */
+   static bool pixelPosToDataIndex(const QPointF& pix_pos,
+                                   const QPixmap& pix,
+                                   int data_rows,
+                                   int data_cols,
+                                   int fallback_scale,
+                                   int& out_col,
+                                   int& out_row);
+
    bool set_null_mouse_pos;
 
 public slots:

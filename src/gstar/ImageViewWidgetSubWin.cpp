@@ -258,6 +258,9 @@ void ImageViewWidgetSubWin::setUnitLabels(QString label)
 
 void ImageViewWidgetSubWin::newGridLayout(int rows, int cols)
 {
+	// The pixmaps these belonged to are about to be destroyed; a leftover scale applied to a new
+	// image would put every pixel-to-motor lookup on the wrong measurement.
+	clearRenderScales();
 
 	for (auto &itr : _sub_windows)
 	{
@@ -387,25 +390,115 @@ QRectF ImageViewWidgetSubWin::getSceneRect()
 
 //---------------------------------------------------------------------------
 
-void ImageViewWidgetSubWin::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
+int ImageViewWidgetSubWin::effectiveRenderScaleAt(int idx)
 {
-    // Scene position is in image pixels; the transformers below index the data array, so undo
-    // the render upscale that gen_image applied (one measurement spans scale x scale pixels).
-    int scale = renderScaleAt(0);
-    int x = (int)(event->scenePos().x()) / scale;
-    int y = (int)(event->scenePos().y()) / scale;
-    m_coordWidget -> setCoordinate(x,y);
-    int idx = 0;
-    for(auto &itr : _sub_windows)
+    if(idx < 0 || idx >= (int)_sub_windows.size())
     {
-        int sub_scale = renderScaleAt(idx);
-        // Deliberately integer division: the transformers want a data row/column index.
-        int sub_x = (int)(event->scenePos().x()) / sub_scale;
-        int sub_y = (int)(event->scenePos().y()) / sub_scale;
-        itr.counts_coord_widget->setCoordinate((double)sub_x, (double)sub_y, 0.0);
-        idx++;
+        return renderScaleAt(idx);
+    }
+    SubImageWindow& win = _sub_windows[idx];
+    if(win.scene == nullptr || win.counts_lookup == nullptr)
+    {
+        return renderScaleAt(idx);
+    }
+    QGraphicsPixmapItem* item = win.scene->getPixmapItem();
+    const ArrayXXr<float>* arr = win.counts_lookup->get_count_array();
+    if(item == nullptr || arr == nullptr || arr->rows() <= 0)
+    {
+        return renderScaleAt(idx);
+    }
+    int data_rows = (int)arr->rows();
+    int pix_h = item->pixmap().height();
+    if(pix_h < data_rows)
+    {
+        return renderScaleAt(idx);
+    }
+    return std::max(1, pix_h / data_rows);
+}
+
+//---------------------------------------------------------------------------
+
+bool ImageViewWidgetSubWin::sceneToDataIndex(int idx, const QPointF& scene_pos, int& out_col, int& out_row)
+{
+    if(idx < 0 || idx >= (int)_sub_windows.size())
+    {
+        return false;
+    }
+    SubImageWindow& win = _sub_windows[idx];
+    if(win.scene == nullptr)
+    {
+        return false;
+    }
+    QGraphicsPixmapItem* item = win.scene->getPixmapItem();
+    if(item == nullptr)
+    {
+        return false;
     }
 
+    int data_rows = 0;
+    int data_cols = 0;
+    if(win.counts_lookup != nullptr)
+    {
+        const ArrayXXr<float>* arr = win.counts_lookup->get_count_array();
+        if(arr != nullptr)
+        {
+            data_rows = (int)arr->rows();
+            data_cols = (int)arr->cols();
+        }
+    }
+
+    return pixelPosToDataIndex(scene_pos, item->pixmap(), data_rows, data_cols, renderScaleAt(idx), out_col, out_row);
+}
+
+//---------------------------------------------------------------------------
+
+void ImageViewWidgetSubWin::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
+{
+    if(event == nullptr)
+    {
+        return;
+    }
+
+    // scenePos() is in the pixmap pixels of the sub window that emitted this, so the measurement
+    // under the cursor has to be resolved against that window. Every sub window shows the same
+    // scan, so the one row/column found here is then what all of them report; converting per
+    // window with each window's own scale would mean a region link pixmap (never upscaled) and a
+    // map pixmap (upscaled) disagreeing about where the cursor is.
+    int src_idx = -1;
+    QObject* src = sender();
+    for(size_t i = 0; i < _sub_windows.size(); i++)
+    {
+        if(static_cast<QObject*>(_sub_windows[i].scene) == src)
+        {
+            src_idx = (int)i;
+            break;
+        }
+    }
+    if(src_idx < 0)
+    {
+        src_idx = 0;
+    }
+
+    int col = 0;
+    int row = 0;
+    if(false == sceneToDataIndex(src_idx, event->scenePos(), col, row))
+    {
+        // Off the map - the colorbar strip gen_image appends to the right lands here. Leave the
+        // last readout up rather than report a clamped position as if it were a real one.
+        return;
+    }
+
+    if(m_coordWidget != nullptr)
+    {
+        m_coordWidget->setCoordinate(col, row);
+    }
+    for(auto &itr : _sub_windows)
+    {
+        if(itr.counts_coord_widget != nullptr)
+        {
+            itr.counts_coord_widget->setCoordinate((double)col, (double)row, 0.0);
+        }
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -921,7 +1014,19 @@ void ImageViewWidgetSubWin::updateScaleBar()
         if (units_per_pixel <= 0.0) units_per_pixel = 1.0;
         QString unit_label = scene->getUnitsLabel();
 
-        double target_pixels = pix.width() / 5.0;
+        // pix.width() includes the colorbar strip gen_image appends to the right, so size the bar
+        // against the map itself, otherwise the "about a fifth of the image" heuristic drifts.
+        double map_width = pix.width();
+        if(_sub_windows[0].counts_lookup != nullptr)
+        {
+            const ArrayXXr<float>* arr = _sub_windows[0].counts_lookup->get_count_array();
+            if(arr != nullptr && arr->cols() > 0)
+            {
+                map_width = std::min(map_width, (double)arr->cols() * (double)effectiveRenderScaleAt(0));
+            }
+        }
+
+        double target_pixels = map_width / 5.0;
         double target_units = target_pixels * units_per_pixel;
         if (target_units <= 0.0)
         {
@@ -953,7 +1058,7 @@ void ImageViewWidgetSubWin::updateScaleBar()
             double outX0, outX1, outY, outZ;
             // nice_pixels is a length in image pixels; the motor transformer is indexed in data
             // pixels, so step it by the measurement count the bar actually spans.
-            double nice_data_px = nice_pixels / (double)renderScaleAt(0);
+            double nice_data_px = nice_pixels / (double)effectiveRenderScaleAt(0);
             m_coordWidget->model()->runTransformer(0.0, 0.0, 0.0, &outX0, &outY, &outZ);
             m_coordWidget->model()->runTransformer(nice_data_px, 0.0, 0.0, &outX1, &outY, &outZ);
             // reuse outY since outY and outZ not needed.

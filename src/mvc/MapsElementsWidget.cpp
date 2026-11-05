@@ -936,6 +936,9 @@ void MapsElementsWidget::onElementSelect(QString name, int viewIdx)
 
     if (_model != nullptr && _model->regionLinks().count(name) > 0)
     {
+        // Not produced by gen_image, so it never got the render upscale. Without this the scale
+        // from whatever map was in this slot before would still be applied to it.
+        m_imageViewWidget->setRenderScaleAt(viewIdx, 1);
         m_imageViewWidget->setSubScenePixmap(viewIdx, QPixmap::fromImage((_model->regionLinks().at(name))));
     }
     else
@@ -1626,7 +1629,25 @@ void MapsElementsWidget::model_updated()
     _quant_widget->setModel(_model);
 
     _motor_trans.setMotors(_model->get_x_axis(), _model->get_y_axis());
-    
+    {
+        // A dataset can carry axes that are empty, degenerate, or all zero. The transformer then
+        // has nothing to look up and the readout can only print 0 for both motors, which on screen
+        // is indistinguishable from a broken pixel-to-motor mapping. Say which one it is.
+        const ArrayXXr<float>& xa = _model->get_x_axis();
+        const ArrayXXr<float>& ya = _model->get_y_axis();
+        if(xa.size() < 1 || ya.size() < 1)
+        {
+            logW << "Dataset " << _model->getDatasetName().toStdString()
+                 << " has no x_axis/y_axis; mouse-over motor positions will read 0.\n";
+        }
+        else if(ya.rows() < 2)
+        {
+            logW << "Dataset " << _model->getDatasetName().toStdString() << " y_axis is "
+                 << ya.rows() << "x" << ya.cols()
+                 << "; mouse-over motor Y is looked up by row and cannot vary.\n";
+        }
+    }
+
     annoTabChanged(m_tabWidget->currentIndex());
 
     redrawCounts();
