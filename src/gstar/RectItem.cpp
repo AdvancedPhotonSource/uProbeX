@@ -19,6 +19,10 @@ RectItem::RectItem(qreal x, qreal y, qreal w, qreal h,
    m_rect = QRectF(0.0, 0.0, w, h);
    setPos(x, y);
 
+   // mouseMoveEvent() branches on this, and a drag can begin before any
+   // mousePressEvent() has set it.
+   m_grip = None;
+
    // Set movable and selectable flags
    setFlag(QGraphicsItem::ItemIsMovable);
    setFlag(QGraphicsItem::ItemIsSelectable);
@@ -300,7 +304,7 @@ void RectItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
    if (pt.x() <= m_rect.width() &&
        pt.y() <= m_rect.height() &&
        pt.x() >= m_rect.width() - 8 / scale &&
-       pt.y() >- m_rect.height() - 8 / scale) {
+       pt.y() >= m_rect.height() - 8 / scale) {
       m_grip = BottomRight;
    }
 
