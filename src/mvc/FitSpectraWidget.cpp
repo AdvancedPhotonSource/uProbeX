@@ -338,12 +338,22 @@ void FitSpectraWidget::update_selected_element_to_add(QString val)
 
 void FitSpectraWidget::setParamOverride(data_struct::Params_Override<double>* po)
 {
-	_param_override = po; 
+	_param_override = po;
 	if (_param_override != nullptr)
 	{
 		setElementDetector(_param_override->detector_element);
 		setElementsToFit(&(_param_override->elements_to_fit));
 		setFitParams(&(_param_override->fit_params));
+	}
+	else
+	{
+		// _elements_to_fit aliases _param_override->elements_to_fit. Clearing
+		// only _param_override left it pointing into the object that was just
+		// taken away, and "Add Element" writes through it:
+		// (*_elements_to_fit)[name] = fit_element. The null check on the
+		// delete path cannot catch that - the pointer is not null, it is
+		// dangling.
+		setElementsToFit(nullptr);
 	}
 }
 
