@@ -4,6 +4,7 @@
  *---------------------------------------------------------------------------*/
 
 #include <mvc/CoLocalizationWidget.h>
+#include <QSignalBlocker>
 
 
 constexpr unsigned int RED_WINDOW = 0;
@@ -396,6 +397,17 @@ void CoLocalizationWidget::onSetAnalysisType(QString name)
     QString saved_green = _cb_green_element->currentText();
     QString saved_blue = _cb_blue_element->currentText();
 
+    // Block the combo boxes while they are rebuilt. Every clear(), addItem()
+    // and setCurrentText() below emits currentTextChanged, and each of those
+    // runs on{Red,Green,Blue}ColorSelected -> displayCounts(), so switching
+    // analysis type redrew all three channel images once per emission - with
+    // _fit_counts still holding the previous analysis type's data for the
+    // emissions that happen before it is replaced. The blockers stay in scope
+    // for the rest of the function; one redraw is issued at the end.
+    const QSignalBlocker block_red(_cb_red_element);
+    const QSignalBlocker block_green(_cb_green_element);
+    const QSignalBlocker block_blue(_cb_blue_element);
+
     _cb_red_element->clear();
     _cb_green_element->clear();
     _cb_blue_element->clear();
@@ -484,6 +496,15 @@ void CoLocalizationWidget::onSetAnalysisType(QString name)
         _cb_blue_element->setCurrentText(saved_blue);
     }
 
+    // The single redraw the blocked selections above would otherwise have
+    // triggered. Same first-selection bookkeeping as the three slots.
+    displayCounts(_firstRed || _firstGreen || _firstBlue);
+    if (false == _contrast_widget->is_global_contrast_checked())
+    {
+        _firstRed = false;
+        _firstGreen = false;
+        _firstBlue = false;
+    }
 }
 
 //---------------------------------------------------------------------------
