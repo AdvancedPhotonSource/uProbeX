@@ -215,7 +215,7 @@ bool PolarXanesWidget::_generate_plot_axis(QString analysis_name, QString elemen
                             double sum_n = (static_cast<double>(element_arr(1,c)) / static_cast<double>(us_ic_map(1,c)) );
                             for(int i = 1; i < incr; i++)
                             {
-                                sum_n += (static_cast<double>(element_arr(1,c+1)) / static_cast<double>(us_ic_map(1,c+1)) );
+                                sum_n += (static_cast<double>(element_arr(1,c+i)) / static_cast<double>(us_ic_map(1,c+i)) );
                             }
 
                             out_element_diff[idx] = sum_p - sum_n;
