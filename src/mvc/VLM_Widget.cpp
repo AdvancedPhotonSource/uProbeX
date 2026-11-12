@@ -71,7 +71,7 @@ static const int ID_PYTHON = 2;
 //---------------------------------------------------------------------------
 
 VLM_Widget::VLM_Widget(QWidget* parent)
-: AbstractImageWidget(1,1,parent)
+: AbstractImageWidget(1,1,false,parent)
 {
 
    _init();
@@ -81,7 +81,7 @@ VLM_Widget::VLM_Widget(QWidget* parent)
 //---------------------------------------------------------------------------
 
 VLM_Widget::VLM_Widget(ScanRegionDialog* scan_dialog, QWidget* parent)
-: AbstractImageWidget(1,1,parent)
+: AbstractImageWidget(1,1,false,parent)
 {
    _scan_dialog = scan_dialog;
    _init();
@@ -90,7 +90,7 @@ VLM_Widget::VLM_Widget(ScanRegionDialog* scan_dialog, QWidget* parent)
 
 //---------------------------------------------------------------------------
 
-VLM_Widget::VLM_Widget(QString dataset_name, QWidget* parent) : AbstractImageWidget(1,1,parent)
+VLM_Widget::VLM_Widget(QString dataset_name, QWidget* parent) : AbstractImageWidget(1,1,false,parent)
 {
    m_datasetPath = dataset_name;
    _init();

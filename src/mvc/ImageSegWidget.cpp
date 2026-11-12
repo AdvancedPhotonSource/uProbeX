@@ -9,7 +9,7 @@
 //---------------------------------------------------------------------------
 
 ImageSegWidget::ImageSegWidget(QWidget* parent)
-: AbstractImageWidget(1,1,parent)
+: AbstractImageWidget(1,1,false,parent)
 {
     _draw_action_mode = gstar::DRAW_ACTION_MODES::OFF;
     _selected_roi = nullptr;

@@ -12,7 +12,7 @@ constexpr unsigned int BLUE_WINDOW = 1;
 constexpr unsigned int GREEN_WINDOW = 2;
 //---------------------------------------------------------------------------
 
-CoLocalizationWidget::CoLocalizationWidget(QWidget* parent) : gstar::AbstractImageWidget(1, 1, parent)
+CoLocalizationWidget::CoLocalizationWidget(QWidget* parent) : gstar::AbstractImageWidget(1, 1, false, parent)
 {
     _model = nullptr;
     _firstRed = true;
