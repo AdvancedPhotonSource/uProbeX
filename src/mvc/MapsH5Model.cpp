@@ -3365,8 +3365,21 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
         // contrast_limits string and uninitialized reads, now that the legend labels print them.
         float counts_max = 0.0f;
         float counts_min = 0.0f;
+        // Eigen does not check sizes in release, so a scaler saved at a different scan size
+        // than the counts would read off the end. MapsElementsWidget's export path already
+        // tests this before the same division; gen_pixmap did not.
+        const bool normalizer_fits = (props.normalizer != nullptr
+                                      && props.normalizer->rows() == normalized.rows()
+                                      && props.normalizer->cols() == normalized.cols());
+        if (props.normalizer != nullptr && false == normalizer_fits)
+        {
+            logW << "Scaler is " << props.normalizer->rows() << "x" << props.normalizer->cols()
+                 << " but counts are " << normalized.rows() << "x" << normalized.cols()
+                 << "; skipping normalization for " << props.element << "\n";
+        }
+
         // show normalized by mass calib curve
-        if (props.normalizer != nullptr && props.calib_curve != nullptr)
+        if (normalizer_fits && props.calib_curve != nullptr)
         {
             if (props.calib_curve->calib_curve.count(props.element) > 0)
             {
@@ -3381,7 +3394,7 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
                 normalized = normalized.unaryExpr([min_coef](float v) { return std::isfinite(v) ? v : min_coef; });
             }
         }
-        else if (props.normalizer != nullptr)
+        else if (normalizer_fits)
         {
             // show normalized just by scaler
             normalized /= (*props.normalizer);
@@ -3759,6 +3772,17 @@ void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, con
                     {
                         normalizer = &(scalers->at(n_itr));
                     }
+                    // Dropped rather than used at the wrong size: counts /= (*normalizer)
+                    // below is unchecked in release. Every normalizer != nullptr test after
+                    // this point then correctly falls through to the un-normalized branch.
+                    if (normalizer != nullptr
+                        && (normalizer->rows() != _y_axis.rows() || normalizer->cols() != _x_axis.cols()))
+                    {
+                        logW << "Scaler " << n_itr << " is " << normalizer->rows() << "x" << normalizer->cols()
+                             << " but the scan is " << _y_axis.rows() << "x" << _x_axis.cols()
+                             << "; exporting without normalization\n";
+                        normalizer = nullptr;
+                    }
                     Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
 
                     for (auto& e_itr : *a_itr.second)
@@ -3860,6 +3884,17 @@ void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, con
                 if (scalers != nullptr && scalers->count(n_itr) > 0)
                 {
                     normalizer = &(scalers->at(n_itr));
+                }
+                // The per pixel reads below are (*normalizer)(yidx, xidx) with yidx and xidx
+                // bounded by the scan axes, not by the scaler, and Eigen does not range check
+                // in release. Drop a scaler that is not the scan's size.
+                if (normalizer != nullptr
+                    && (normalizer->rows() != _y_axis.rows() || normalizer->cols() != _x_axis.cols()))
+                {
+                    logW << "Scaler " << n_itr << " is " << normalizer->rows() << "x" << normalizer->cols()
+                         << " but the scan is " << _y_axis.rows() << "x" << _x_axis.cols()
+                         << "; exporting without normalization\n";
+                    normalizer = nullptr;
                 }
                 Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
 
