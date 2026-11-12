@@ -6,6 +6,7 @@
 #include <mvc/Scaler_Widget.h>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QSignalBlocker>
 
 //---------------------------------------------------------------------------
 
@@ -51,26 +52,50 @@ void Scaler_Widget::createLayout()
 
 void Scaler_Widget::setModel(RAW_Model* model)
 {
-    if (_model != model)
+    if (_model == model)
     {
-        //_spectra_widget->clearAllSpectra();
-        _model = model;
+        return;
+    }
 
-        Eigen::Index rows, cols;
+    //_spectra_widget->clearAllSpectra();
+    _model = model;
 
-        _model->getDims(rows, cols);
+    // The combo was only ever appended to. Opening a second dataset
+    // concatenated its scalers onto the first one's, and itemText(0) below
+    // still named a scaler from the first dataset ever loaded, so the table
+    // showed that dataset's values under the new scan's name. Blocked so the
+    // clear and the refill do not drive onScalerSelect through a combo that
+    // does not match _model yet.
+    {
+        QSignalBlocker blocker(_cb_scaler);
+        _cb_scaler->clear();
+    }
 
-        _scaler_table_widget->setRowCount(rows);
-        _scaler_table_widget->setColumnCount(cols);
-        data_struct::Scan_Info<double>* scan_info = _model->getScanInfo();
-        if (scan_info != nullptr)
+    if (_model == nullptr)
+    {
+        _scaler_table_widget->clearContents();
+        _scaler_table_widget->setRowCount(0);
+        _scaler_table_widget->setColumnCount(0);
+        return;
+    }
+
+    Eigen::Index rows, cols;
+
+    _model->getDims(rows, cols);
+
+    _scaler_table_widget->setRowCount(rows);
+    _scaler_table_widget->setColumnCount(cols);
+    data_struct::Scan_Info<double>* scan_info = _model->getScanInfo();
+    if (scan_info != nullptr)
+    {
         {
+            QSignalBlocker blocker(_cb_scaler);
             for (const auto& itr : scan_info->scaler_maps)
             {
                 _cb_scaler->addItem(QString::fromLatin1(itr.first.c_str(), itr.first.length()));
             }
-            onScalerSelect(_cb_scaler->itemText(0));
         }
+        onScalerSelect(_cb_scaler->itemText(0));
     }
 }
 
@@ -79,6 +104,10 @@ void Scaler_Widget::setModel(RAW_Model* model)
 void Scaler_Widget::onScalerSelect(const QString& det)
 {
     //const data_struct::ArrayXXr<double>* scaler = nullptr;
+    if (_model == nullptr)
+    {
+        return;
+    }
     Eigen::Index rows, cols;
     _model->getDims(rows, cols);
     std::string name = det.toStdString();
