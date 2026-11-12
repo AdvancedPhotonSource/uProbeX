@@ -176,6 +176,13 @@ void CoLocalizationWidget::onBlueColorSelected(QString name)
 
 void CoLocalizationWidget::displayCounts(bool update_Min_MAx)
 {
+    // gen_pixmap() below is called on _model whenever _fit_counts has the
+    // selected name. _fit_counts outlives the model, so without this a
+    // channel selection after an unload dereferences null.
+    if (_model == nullptr)
+    {
+        return;
+    }
 
     QImage red_img;
     QImage green_img;
@@ -511,14 +518,34 @@ void CoLocalizationWidget::onSetAnalysisType(QString name)
 
 void CoLocalizationWidget::setModel(std::shared_ptr<MapsH5Model> model)
 {
-    if (_model != model)
+    if (_model == model)
     {
-        _model = model;
-        //model_updated();
-        if (_model != nullptr)
-        {
-            onSetAnalysisType(_curAnalysis);
-        }
+        return;
+    }
+
+    _model = model;
+    //model_updated();
+    if (_model != nullptr)
+    {
+        onSetAnalysisType(_curAnalysis);
+    }
+    else
+    {
+        // The dataset is gone. Drop its counts and empty the combos so no
+        // stale channel name is left for the user to click on.
+        _fit_counts.clear();
+
+        const QSignalBlocker block_red(_cb_red_element);
+        const QSignalBlocker block_green(_cb_green_element);
+        const QSignalBlocker block_blue(_cb_blue_element);
+
+        _cb_red_element->clear();
+        _cb_green_element->clear();
+        _cb_blue_element->clear();
+
+        _cb_red_element->addItem(QString(" "));
+        _cb_green_element->addItem(QString(" "));
+        _cb_blue_element->addItem(QString(" "));
     }
 }
 
