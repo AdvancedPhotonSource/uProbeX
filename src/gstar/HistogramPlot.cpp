@@ -8,6 +8,9 @@
 #include <QWidget>
 #include <QApplication>
 
+#include <algorithm>
+#include <cmath>
+
 using namespace gstar;
 
 //---------------------------------------------------------------------------
@@ -23,6 +26,15 @@ HistogramPlot::HistogramPlot(QWidget* parent)
    {
        _bins[i] = 0;
    }
+
+   // A paint event can arrive before the first updatePoints(), and
+   // drawHistogram()/ymap() read all of these.
+   _minCoef = 0.0f;
+   _maxCoef = 0.0f;
+   _bin_width = 0.0f;
+   _min_line = 0.0;
+   _max_line = 0.0;
+   _max_bin_val = 1;      // ymap() divides by this
 
 
    _default_pen = QPen(QColor(188, 187, 192, 200),1);
@@ -100,22 +112,28 @@ void HistogramPlot::drawHistogram()
     }
 
     painter.drawPolygon(polylinePoints, Qt::OddEvenFill);
-    
-    // draw min and max lines
-    polylinePoints.clear();
-    painter.setPen(_min_pen);
-    int pos = std::floor(((_min_line - _minCoef) / (_maxCoef - _minCoef)) * (qreal)(m_widget->width()));
-    polylinePoints.insert(0, QPointF(pos, ymap(0)));
-    polylinePoints.insert(1, QPointF(pos, ymap(_max_bin_val)));
-    painter.drawPolygon(polylinePoints, Qt::OddEvenFill);
 
-    polylinePoints.clear();
-    painter.setPen(_max_pen);
-    pos = std::floor(((_max_line - _minCoef) / (_maxCoef - _minCoef)) * (qreal)(m_widget->width()));
-    polylinePoints.insert(0, QPointF(pos, ymap(0)));
-    polylinePoints.insert(1, QPointF(pos, ymap(_max_bin_val)));
-    painter.drawPolygon(polylinePoints, Qt::OddEvenFill);
-    
+    // draw min and max lines. With no range (a uniform map) the position below
+    // would be 0.0/0.0, and converting that NaN to int is undefined; there is
+    // no meaningful place to put the markers, so skip them.
+    const qreal coef_range = (qreal)_maxCoef - (qreal)_minCoef;
+    if (coef_range > 0.0)
+    {
+        polylinePoints.clear();
+        painter.setPen(_min_pen);
+        int pos = std::floor(((_min_line - _minCoef) / coef_range) * (qreal)(m_widget->width()));
+        polylinePoints.insert(0, QPointF(pos, ymap(0)));
+        polylinePoints.insert(1, QPointF(pos, ymap(_max_bin_val)));
+        painter.drawPolygon(polylinePoints, Qt::OddEvenFill);
+
+        polylinePoints.clear();
+        painter.setPen(_max_pen);
+        pos = std::floor(((_max_line - _minCoef) / coef_range) * (qreal)(m_widget->width()));
+        polylinePoints.insert(0, QPointF(pos, ymap(0)));
+        polylinePoints.insert(1, QPointF(pos, ymap(_max_bin_val)));
+        painter.drawPolygon(polylinePoints, Qt::OddEvenFill);
+    }
+
 }
 
 //---------------------------------------------------------------------------
@@ -143,20 +161,58 @@ qreal HistogramPlot::ymap(const qreal& value)
 void HistogramPlot::updatePoints(const data_struct::ArrayTr<float>& pts)
 {
 
+    // Start from an empty histogram; these used to accumulate across datasets.
+    std::fill(_bins.begin(), _bins.end(), 0);
+    _max_bin_val = 1;
+
+    if (pts.size() <= 0)
+    {
+        _minCoef = 0.0f;
+        _maxCoef = 0.0f;
+        _min_line = 0.0;
+        _max_line = 0.0;
+        _bin_width = 0.0f;
+        m_widget->update();
+        return;
+    }
+
     _minCoef = pts.minCoeff();
     _maxCoef = pts.maxCoeff();
+    // A NaN anywhere in the map propagates through minCoeff()/maxCoeff().
+    if (false == std::isfinite(_minCoef) || false == std::isfinite(_maxCoef))
+    {
+        _minCoef = 0.0f;
+        _maxCoef = 0.0f;
+    }
 
     _min_line = _minCoef;
     _max_line = _maxCoef;
 
-    _bin_width = (_maxCoef - _minCoef) / (_n_bins-1);
+    // A uniform map - an element not present in the scan, or a failed fit -
+    // has a zero range, which made the bin index below 0.0f/0.0f. (int)NaN is
+    // undefined and yields INT_MIN on x86-64, so _bins[bin] wrote far outside
+    // the vector. Everything lands in bin 0 instead.
+    const float range = _maxCoef - _minCoef;
+    const bool single_bin = (range <= 0.0f);
+    _bin_width = single_bin ? 0.0f : (range / (float)(_n_bins - 1));
+
     for (int i = 0; i < pts.size(); i++)
     {
-        int bin = std::floor( (pts(i) - _minCoef) / _bin_width);
+        const float val = pts(i);
+        if (false == std::isfinite(val))
+        {
+            continue;
+        }
+        int bin = 0;
+        if (false == single_bin)
+        {
+            bin = (int)std::floor((val - _minCoef) / _bin_width);
+            // Rounding at the ends can still step outside the range.
+            bin = std::max(0, std::min(bin, _n_bins - 1));
+        }
         _bins[bin] = _bins[bin] + 1;
     }
 
-    _max_bin_val = 0;
     for (int i = 0; i < _n_bins; i++)
     {
         _max_bin_val  = std::max(_bins[i], _max_bin_val);
