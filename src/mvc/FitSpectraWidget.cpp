@@ -1415,6 +1415,10 @@ void FitSpectraWidget::setFitParams(data_struct::Fit_Parameters<double>* fit_par
 void FitSpectraWidget::setElementsToFit(data_struct::Fit_Element_Map_Dict<double>* elements_to_fit)
 {
     _owned_elements_to_fit.reset();
+    // updateFitElements() rebuilds the table from elements_to_fit, which never contains custom
+    // peaks. Without this they would keep their shared_ptr here with no row left to select, so
+    // del_element() could never reach them and every dataset switch leaked another generation.
+    _custom_peaks.clear();
     _fit_elements_table_model->updateFitElements(elements_to_fit);
 	_elements_to_fit = elements_to_fit;
     update_spectra_top_axis();
