@@ -241,51 +241,65 @@ void BatchRoiFitWidget::runProcessing()
 
     analysis_job.fitting_routines.push_back(Fitting_Routines::NNLS);
 
-    if (io::file::init_analysis_job_detectors(&analysis_job))
+    try
     {
-        // lock all fit parameters except elastic/inelastic amp and elements
+        if (io::file::init_analysis_job_detectors(&analysis_job))
+        {
+            // lock all fit parameters except elastic/inelastic amp and elements
         
-        analysis_job.optimize_fit_params_preset = fitting::models::Fit_Params_Preset::BATCH_FIT_NO_TAILS;
+            analysis_job.optimize_fit_params_preset = fitting::models::Fit_Params_Preset::BATCH_FIT_NO_TAILS;
         
-        int proc_total = _roi_map.size() * analysis_job.detector_num_arr.size();
-        _progressBarFiles->setRange(0, proc_total);
-        _progressBarBlocks->setRange(0, _total_itr);
+            int proc_total = _roi_map.size() * analysis_job.detector_num_arr.size();
+            _progressBarFiles->setRange(0, proc_total);
+            _progressBarBlocks->setRange(0, _total_itr);
 
-        _progressBarBlocks->setValue(0);
-        _progressBarFiles->setValue(0);
+            _progressBarBlocks->setValue(0);
+            _progressBarFiles->setValue(0);
 
-        analysis_job.quantification_standard_filename = "maps_standardinfo.txt";
-        io::file::File_Scan::inst()->populate_netcdf_hdf5_files(analysis_job.dataset_directory);
+            analysis_job.quantification_standard_filename = "maps_standardinfo.txt";
+            io::file::File_Scan::inst()->populate_netcdf_hdf5_files(analysis_job.dataset_directory);
 
-        if (analysis_job.quantification_standard_filename.length() > 0)
-        {
-            perform_quantification(&analysis_job, false);
-        }
-
-        std::map<int, std::map<std::string, data_struct::Fit_Parameters<double>>> roi_fit_params;
-        int i = 0;
-        for (auto& itr : _roi_map)
-        {
-            i++;
-            optimize_single_roi(analysis_job, itr.second.fileName().toStdString(), roi_fit_params, &cb_func);
-            _progressBarFiles->setValue(i);
-            QCoreApplication::processEvents();
-        }
-
-        _progressBarBlocks->setValue(_total_itr);
-        _progressBarFiles->setValue(proc_total);
-
-        // save all to csv
-        for (auto detector_num : analysis_job.detector_num_arr)
-        {
-            std::string save_path = analysis_job.dataset_directory + "output/specfit_results" + std::to_string(detector_num) + ".csv";
-            std::string quant_save_path = analysis_job.dataset_directory + "output/specfit_results" + std::to_string(detector_num) + "_quantified.csv";
-            io::file::csv::save_v9_specfit(save_path, roi_fit_params.at(detector_num));
-            if (analysis_job.get_detector(detector_num)->quantification_standards.size() > 0)
+            if (analysis_job.quantification_standard_filename.length() > 0)
             {
-                io::file::csv::save_v9_specfit_quantified(quant_save_path, analysis_job.get_detector(detector_num), analysis_job.fitting_routines, roi_fit_params.at(detector_num));
+                perform_quantification(&analysis_job, false);
+            }
+
+            std::map<int, std::map<std::string, data_struct::Fit_Parameters<double>>> roi_fit_params;
+            int i = 0;
+            for (auto& itr : _roi_map)
+            {
+                i++;
+                optimize_single_roi(analysis_job, itr.second.fileName().toStdString(), roi_fit_params, &cb_func);
+                _progressBarFiles->setValue(i);
+                QCoreApplication::processEvents();
+            }
+
+            _progressBarBlocks->setValue(_total_itr);
+            _progressBarFiles->setValue(proc_total);
+
+            // save all to csv
+            for (auto detector_num : analysis_job.detector_num_arr)
+            {
+                std::string save_path = analysis_job.dataset_directory + "output/specfit_results" + std::to_string(detector_num) + ".csv";
+                std::string quant_save_path = analysis_job.dataset_directory + "output/specfit_results" + std::to_string(detector_num) + "_quantified.csv";
+                io::file::csv::save_v9_specfit(save_path, roi_fit_params.at(detector_num));
+                if (analysis_job.get_detector(detector_num)->quantification_standards.size() > 0)
+                {
+                    io::file::csv::save_v9_specfit_quantified(quant_save_path, analysis_job.get_detector(detector_num), analysis_job.fitting_routines, roi_fit_params.at(detector_num));
+                }
             }
         }
+    }
+    catch (...)
+    {
+        // status_callback() throws 20 when the user presses Cancel, and
+        // optimize_single_roi() calls it from inside the fit loop above.
+        // Nothing between there and main() caught it, so cancelling a batch
+        // ROI fit called std::terminate and killed the application.
+        // PerPixelFitWidget and FittingDialog already wrap the identical
+        // call this way. Also covers roi_fit_params.at() throwing for a
+        // detector that produced no results.
+        logI << "Batch ROI fitting canceled\n";
     }
     
 
