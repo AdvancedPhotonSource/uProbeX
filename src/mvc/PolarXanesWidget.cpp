@@ -161,8 +161,20 @@ bool PolarXanesWidget::_generate_plot_axis(QString analysis_name, QString elemen
                 {
                     data_struct::Fit_Count_Dict<float> element_counts;
                     _model->getAnalyzedCounts(analysis_name.toStdString(), element_counts);
-                    
-                    data_struct::ArrayXXr<float> element_arr = element_counts.at(element_name.toStdString());
+
+                    // The element combo is not refilled when the analysis
+                    // combo changes, so element_name is routinely a name that
+                    // only the previously selected analysis type fitted. at()
+                    // throws std::out_of_range for those, and nothing up the
+                    // stack catches it.
+                    const std::string element_key = element_name.toStdString();
+                    if (element_counts.count(element_key) == 0)
+                    {
+                        logW << "Element " << element_key << " not present in analysis type " << analysis_name.toStdString() << "\n";
+                        return false;
+                    }
+
+                    data_struct::ArrayXXr<float> element_arr = element_counts.at(element_key);
 
                     int incr = _model->get_polarity_pattern().length();
                     // test LRRL
