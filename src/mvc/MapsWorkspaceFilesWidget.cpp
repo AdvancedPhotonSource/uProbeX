@@ -251,22 +251,22 @@ void MapsWorkspaceFilesWidget::onOpenModel(const QStringList& names_list, MODEL_
                             break;
                         }
                     }
-                    data_struct::Params_Override<double>* param_override = _model->getParamOverride(idx);
+                    // Share ownership with MapsWorkspaceModel rather than
+                    // aliasing its storage with a no-op deleter. The alias did
+                    // not take a reference, so re-running load_fit_params()
+                    // (Save Fit Parameters does) reassigned the dict entry,
+                    // freed the override, and left every loaded model reading
+                    // and writing the freed maps.
+                    std::shared_ptr<data_struct::Params_Override<double>> param_override_ptr = _model->getParamOverridePtr(idx);
                     //if we can't find override for specific detector, try to use the avg one.
-                    if (param_override == nullptr)
+                    if (param_override_ptr == nullptr)
                     {
-                        param_override = _model->getParamOverride(-1);
+                        param_override_ptr = _model->getParamOverridePtr(-1);
                     }
-                    std::shared_ptr<data_struct::Params_Override<double>> param_override_ptr;
-                    if (param_override == nullptr)
+                    if (param_override_ptr == nullptr)
                     {
                         // generate param file; MapsH5Model becomes sole owner
                         param_override_ptr = std::make_shared<data_struct::Params_Override<double>>();
-                    }
-                    else
-                    {
-                        // non-owning: param_override points into MapsWorkspaceModel's storage
-                        param_override_ptr = std::shared_ptr<data_struct::Params_Override<double>>(param_override, [](data_struct::Params_Override<double>*) {});
                     }
                     h5Model->set_fit_parameters_override(param_override_ptr);
                     emit loaded_model(name, mt);

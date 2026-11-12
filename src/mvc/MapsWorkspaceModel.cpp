@@ -685,6 +685,17 @@ data_struct::Params_Override<double>* MapsWorkspaceModel::getParamOverride(int i
 
 //---------------------------------------------------------------------------
 
+std::shared_ptr<data_struct::Params_Override<double>> MapsWorkspaceModel::getParamOverridePtr(int idx)
+{
+    if(_is_fit_params_loaded && _fit_params_override_dict.count(idx) > 0)
+    {
+        return _fit_params_override_dict[idx];
+    }
+    return nullptr;
+}
+
+//---------------------------------------------------------------------------
+
 data_struct::Fit_Element_Map_Dict<double>* MapsWorkspaceModel::getElementToFit(int idx)
 {
     if(_is_fit_params_loaded && _fit_params_override_dict.count(idx) > 0)

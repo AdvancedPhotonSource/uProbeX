@@ -87,6 +87,12 @@ public:
 
     data_struct::Params_Override<double>* getParamOverride(int idx);
 
+    // Shares ownership. Callers that keep the override past the call - a
+    // MapsH5Model does - must use this and not the raw pointer above:
+    // load_fit_params() reassigns the dict entries, which drops the only
+    // owning reference if nobody else took one.
+    std::shared_ptr<data_struct::Params_Override<double>> getParamOverridePtr(int idx);
+
     const std::map<QString, QFileInfo>& get_hdf5_file_list() { return _h5_fileinfo_list; }
 
     const std::map<QString, QFileInfo>& get_raw_file_list() { return _raw_fileinfo_list; }
