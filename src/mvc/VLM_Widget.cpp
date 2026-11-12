@@ -2577,7 +2577,10 @@ void VLM_Widget::setAvailScans(std::map<QString, BlueskyPlan> * avail_scans)
 void VLM_Widget::onQueueMicroProbeRegion()
 {
    bool found_link = false;
-   ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
+   // getSelectedRegion() returns the base type, and the microprobe tree holds
+   // plain UProbeRegionGraphicsItem objects for every region loaded from the
+   // workspace XML. Only a qobject_cast makes the null test below real.
+   ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
    if (item != nullptr)
    {
       const std::vector<QString> propList = _scan_region_link_dialog->property_list();
@@ -2669,7 +2672,13 @@ void VLM_Widget::onQueueCustomMicroProbeRegion()
    if(_scan_dialog != nullptr)
    {
       const std::vector<QString> propList = _scan_region_link_dialog->property_list();
-      ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
+      // Was a static_cast and was then dereferenced unchecked, below and
+      // again after the dialog returns. See onQueueMicroProbeRegion().
+      ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
+      if (item == nullptr)
+      {
+         return;
+      }
       QString lastScanType = _scan_dialog->getCurrentScanType();
       // get all scan links
       QJsonArray scan_link_profiles = Preferences::inst()->getValue(STR_PREF_SCAN_LINK_PROFILES).toJsonArray();
@@ -2755,7 +2764,15 @@ void VLM_Widget::updatePlan(const BlueskyPlan &plan)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             if(item->getPlan().uuid == (plan.uuid))
@@ -2789,7 +2806,15 @@ void VLM_Widget::removePlan(const BlueskyPlan &plan)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             BlueskyPlan item_plan = item->getPlan();
@@ -2837,7 +2862,15 @@ void VLM_Widget::setPlanFilename(QString uuid, QString filename)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             BlueskyPlan* item_plan = item->getPlanPtr();
@@ -3155,7 +3188,15 @@ void VLM_Widget::saveScanRegionLinks(QString dir)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             QJsonObject json_region_object;
