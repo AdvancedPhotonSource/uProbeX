@@ -184,45 +184,44 @@ bool PolarXanesWidget::_generate_plot_axis(QString analysis_name, QString elemen
                     // [0,] LLLL
                     // [1,] RRRR
                     
-                    if(incr > 0)
+                    // The guard used to be "if (incr > 0)" applied before this halving, so a
+                    // one character polarity pattern - read verbatim from the H5 and never
+                    // validated - left incr at 0 and the division below raised SIGFPE.
+                    // arr_size is also checked, because a zero length result would reach
+                    // minCoeff() on an empty array in _plot_new_element().
+                    incr /= 2;
+                    const int arr_size = (incr > 0) ? (static_cast<int>(element_arr.cols()) / incr) : 0;
+                    if(arr_size > 0)
                     {
-                        incr /= 2;
-                        int arr_size = element_arr.cols() / incr; 
                         out_element_diff.resize(arr_size);
                         out_energy.resize(arr_size);
                         out_element_avg.resize(arr_size);
-                        
-                        for (int c = 0, idx = 0; c < element_arr.cols(); c+=incr, idx++)
+
+                        // Bounded by idx, not by c. arr_size is the number of whole groups
+                        // of incr columns, so c + incr <= cols holds for every iteration.
+                        // The old loop ran while c < cols, which for a column count that is
+                        // not a multiple of incr gave one extra iteration with idx ==
+                        // arr_size - a write one past the end of all three arrays. Its
+                        // "copy the previous value" else branch could never do anything
+                        // else, since every whole group is already covered.
+                        for (int c = 0, idx = 0; idx < arr_size; c+=incr, idx++)
                         {
-                            if(c+incr <= element_arr.cols())
+                            double sum_p = (static_cast<double>(element_arr(0,c)) / static_cast<double>(us_ic_map(0,c)) );
+                            for(int i = 1; i < incr; i++)
                             {
-                                double sum_p = (static_cast<double>(element_arr(0,c)) / static_cast<double>(us_ic_map(0,c)) );
-                                for(int i = 1; i < incr; i++)
-                                {
-                                    sum_p += (static_cast<double>(element_arr(0,c+i)) / static_cast<double>(us_ic_map(0,c+i)) );
-                                }
-
-                                double sum_n = (static_cast<double>(element_arr(1,c)) / static_cast<double>(us_ic_map(1,c)) );
-                                for(int i = 1; i < incr; i++)
-                                {
-                                    sum_n += (static_cast<double>(element_arr(1,c+1)) / static_cast<double>(us_ic_map(1,c+1)) );
-                                }
-
-                                out_element_diff[idx] = sum_p - sum_n;
-                                out_element_avg[idx] = (sum_p + sum_n)/ 2.0;                        
-
-                                out_energy[idx] = static_cast<double>(energy_map(0,c));
+                                sum_p += (static_cast<double>(element_arr(0,c+i)) / static_cast<double>(us_ic_map(0,c+i)) );
                             }
-                            else
+
+                            double sum_n = (static_cast<double>(element_arr(1,c)) / static_cast<double>(us_ic_map(1,c)) );
+                            for(int i = 1; i < incr; i++)
                             {
-                                if(idx > 0)
-                                {
-                                    out_element_diff[idx] = out_element_diff[idx - 1]; 
-                                    out_element_avg[idx] = out_element_avg[idx - 1];
-                                    out_energy[idx] = out_energy[idx - 1];
-                                }
+                                sum_n += (static_cast<double>(element_arr(1,c+1)) / static_cast<double>(us_ic_map(1,c+1)) );
                             }
-        
+
+                            out_element_diff[idx] = sum_p - sum_n;
+                            out_element_avg[idx] = (sum_p + sum_n)/ 2.0;
+
+                            out_energy[idx] = static_cast<double>(energy_map(0,c));
                         }
                         return true;
                     }
