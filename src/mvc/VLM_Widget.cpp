@@ -2892,6 +2892,12 @@ void VLM_Widget::loadScanRegionLinks(QString dir)
          BlueskyPlan item_plan;
          QJsonObject json_region_object = regions[i].toObject();
          ScanRegionGraphicsItem* annotation = new ScanRegionGraphicsItem();
+
+         // Same wiring as onAddMicroProbeRegion(). Without it, deleting a
+         // restored region removes it from the view while its queued scan
+         // stays on the queue server and still runs.
+         connect(annotation, &ScanRegionGraphicsItem::planRemoved, this, &VLM_Widget::onScanRemoved);
+
          if(json_region_object.contains(UPROBE_NAME))
          {
             annotation->setPropertyValue(UPROBE_NAME, json_region_object.value(UPROBE_NAME).toString());
