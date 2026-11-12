@@ -757,12 +757,10 @@ void FitSpectraWidget::deleteROISpectra(std::string name)
 {
     if (_roi_spec_map.count(name) > 0)
     {
-        auto spec = _roi_spec_map.at(name);
-        if (spec != nullptr)
-        {
-            spec->resize(1);
-        }
+        // Do not resize/clear the array: these pointers are non-owning aliases into the
+        // model's Map_ROI storage, so touching the data here destroys the model's spectra.
         _roi_spec_map.erase(name);
+        _roi_spec_colors.erase(name);
         _spectra_widget->remove_spectra(QString(name.c_str()));
     }
     replot_integrated_spectra(false);
@@ -772,16 +770,14 @@ void FitSpectraWidget::deleteROISpectra(std::string name)
 
 void FitSpectraWidget::deleteAllROISpectra()
 {
+    // Do not resize/clear the arrays: these pointers are non-owning aliases into the
+    // model's Map_ROI storage, so touching the data here destroys the model's spectra.
     for (auto &itr : _roi_spec_map)
     {
-        auto spec = itr.second;
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
-        if (spec != nullptr)
-        {
-            spec->resize(1);
-        }
     }
     _roi_spec_map.clear();
+    _roi_spec_colors.clear();
     replot_integrated_spectra(false);
 }
 
@@ -818,6 +814,7 @@ void FitSpectraWidget::clearROISpectra()
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
     }
     _roi_spec_map.clear();
+    _roi_spec_colors.clear();
 }
 
 //---------------------------------------------------------------------------
@@ -914,11 +911,14 @@ void FitSpectraWidget::del_element()
 
             if( fit_element != nullptr )
             {
+                // Copy the name out first: full_name() returns a reference into the element,
+                // which erase() may destroy while still using the key.
+                const std::string el_full_name = fit_element->full_name();
                 // Drop our references to the element; the shared_ptr held by the
                 // table model row goes away with removeRows() below.
                 if( _elements_to_fit != nullptr )
                 {
-                    _elements_to_fit->erase(fit_element->full_name());
+                    _elements_to_fit->erase(el_full_name);
                 }
                 auto it = std::find_if(_custom_peaks.begin(), _custom_peaks.end(),
                     [fit_element](const std::shared_ptr<data_struct::Fit_Element_Map<double>>& p) { return p.get() == fit_element; });

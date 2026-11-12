@@ -1219,7 +1219,9 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                             energy_range.max);
 
                         spectra_background = spectra_background.unaryExpr([](double v) { return (v > 0.0) ? v : 0.0; });
-                        (ArrayDr)single_spec += spectra_background;
+                        // No cast: (ArrayDr)single_spec builds a temporary copy, so the
+                        // background was being added to something immediately discarded.
+                        single_spec += spectra_background;
                     }
                     else
                     {
