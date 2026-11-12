@@ -159,10 +159,22 @@ int FitElementsTableModel::columnCount(const QModelIndex &parent) const
 
 void FitElementsTableModel::updateFitElements(data_struct::Fit_Element_Map_Dict<double>* elements_to_fit)
 {
+    // Every TreeItem in _nodes is destroyed below, and the QModelIndexes this
+    // model hands out carry a raw TreeItem* in internalPointer(). dataChanged
+    // and layoutChanged do not invalidate those, so the attached
+    // QItemSelectionModel kept persistent indexes pointing at freed items and
+    // getElementByIndex() dereferenced them. A proper reset makes every view
+    // and selection model drop what it holds.
+    beginResetModel();
+
+    _row_indicies.clear();
+    _nodes.clear();
+
+    // A null dict is a clear, not a no-op: callers pass null when the object
+    // owning the dict is going away, and leaving the old rows up would keep
+    // shared_ptrs and let the user act on a dataset that no longer exists.
     if(elements_to_fit != nullptr)
     {
-        _row_indicies.clear();
-        _nodes.clear();
         for(auto& itr : *elements_to_fit)
         {
             const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element = itr.second;
@@ -211,13 +223,9 @@ void FitElementsTableModel::updateFitElements(data_struct::Fit_Element_Map_Dict<
         }
 
         std::sort(_row_indicies.begin(), _row_indicies.end());
-
-        QModelIndex topLeft = index(0, 0);
-        QModelIndex bottomRight = index(_row_indicies.size()-1, NUM_PROPS-1);
-        emit dataChanged(topLeft, bottomRight);
-        emit layoutChanged();
-
     }
+
+    endResetModel();
 }
 
 //---------------------------------------------------------------------------
