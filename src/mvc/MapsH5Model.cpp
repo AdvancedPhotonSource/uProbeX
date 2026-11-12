@@ -286,9 +286,11 @@ void MapsH5Model::clearAllMapRois()
 
 //---------------------------------------------------------------------------
 
-void MapsH5Model::appendMapRoi(std::string name, struct Map_ROI roi)
+struct Map_ROI& MapsH5Model::appendMapRoi(const std::string& name, const struct Map_ROI& roi)
 {
-    _map_rois[name] = roi;
+    Map_ROI& stored = _map_rois[name];
+    stored = roi;
+    return stored;
 }
 
 //---------------------------------------------------------------------------
@@ -426,12 +428,14 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
 
     if (rootJson.contains(STR_MAPS_ROIS.c_str()) && rootJson[STR_MAPS_ROIS.c_str()].isArray())
     {
-        bool int_spec_loaded = false;
         QJsonArray rois = rootJson[STR_MAPS_ROIS.c_str()].toArray();
         for (int i = 0; i < rois.size(); ++i)
         {
             QJsonObject jsonRoi = rois[i].toObject();
 
+            // Per roi: a roi that has an int spec array but no entry for this dataset still
+            // needs the hdf5 fallback below, so this must not carry over from the previous roi.
+            bool int_spec_loaded = false;
             Map_ROI mroi;
             mroi.name = jsonRoi.value(STR_MAP_ROI_NAME.c_str()).toString().toStdString();
             mroi.color = QColor::fromRgba(QRgb(jsonRoi.value(STR_MAP_ROI_COLOR.c_str()).toInt()));
@@ -477,7 +481,10 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
                             mroi.int_spec[stdFilename].resize(json_spec_arr.size());
                             for (int n = 0; n < json_spec_arr.size(); ++n)
                             {
-                                mroi.int_spec[stdFilename](n) = json_spec_arr[n].toInt();
+                                // toDouble, not toInt: these are summed float counts and are
+                                // routinely fractional, and QJsonValue::toInt() yields 0 for
+                                // any value that is not exactly integral.
+                                mroi.int_spec[stdFilename](n) = json_spec_arr[n].toDouble();
                             }
                             mroi.int_spec[stdFilename].elapsed_livetime(json_int_spec[STR_ELT.c_str()].toDouble());
                             mroi.int_spec[stdFilename].elapsed_realtime(json_int_spec[STR_ERT.c_str()].toDouble());
@@ -488,18 +495,18 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
                     }
                 }
             }
-            else
-            {
-                int_spec_loaded = false;
-            }
 
             if (false == int_spec_loaded)
             {
                 std::string stdFileName = base_filename.toStdString();
                 std::unordered_map<std::string, double> scaler_sum_map;
-                // load it 
-                if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_dir.absolutePath().toStdString(), mroi.pixel_list, &(mroi.int_spec[stdFileName]), scaler_sum_map))
+                // Load into a local and only insert on success: indexing int_spec here would
+                // leave behind an empty spectra on failure, which then gets "normalized",
+                // plotted, offered in the fit selector and resaved over the real data.
+                data_struct::Spectra<double> loaded_spec;
+                if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_dir.absolutePath().toStdString(), mroi.pixel_list, &loaded_spec, scaler_sum_map))
                 {
+                    mroi.int_spec[stdFileName] = std::move(loaded_spec);
                     QJsonArray jsonIntSpecArr = jsonRoi[STR_MAP_ROI_INT_SPEC.c_str()].toArray();
 
                     QJsonObject json_int_spec;
@@ -538,6 +545,9 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
                     logW << "Failed to load roi spectra for " << _dir.absolutePath().toStdString() << "\n";
                 }
             }
+            // this roi was built field by field above, so the normalized spectra the spectra widget
+            // plots has to be generated here the way the Map_ROI constructor would have
+            mroi.normalize_int_spec_by_elt(base_filename.toStdString());
             _map_rois[mroi.name] = mroi;
             logI<< "Loading roi: "<< mroi.name<<"\n";
         }
@@ -3946,8 +3956,8 @@ void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, con
 
                     out_stream << "\n";
                     // check if there are any ROI's and export them
-                    const std::unordered_map<std::string, Map_ROI> rois = get_map_rois();
-                    for (auto itr_roi : rois)
+                    const std::unordered_map<std::string, Map_ROI>& rois = get_map_rois();
+                    for (const auto& itr_roi : rois)
                     {
                         out_stream << "ROI: "<<itr_roi.first<<"\n";
                         for (auto& p_itr : itr_roi.second.pixel_list)

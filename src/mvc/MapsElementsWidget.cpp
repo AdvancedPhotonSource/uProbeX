@@ -49,6 +49,28 @@ static inline bool array_contains(const data_struct::ArrayXXr<float>& arr, int r
     return row >= 0 && col >= 0 && row < (int)arr.rows() && col < (int)arr.cols();
 }
 
+// The spectra to plot for a roi: the elapsed live time normalized copy when the roi has one for
+// this dataset, otherwise the raw integrated spectra. Both live inside the model's Map_ROI storage,
+// so the returned shared_ptr is non owning and only valid while that roi is in the model. Returns
+// null when the roi has no spectra at all for this dataset.
+static std::shared_ptr<ArrayDr> non_owning_roi_spectra(const Map_ROI& roi, const std::string& dataset_name)
+{
+    auto norm_itr = roi.int_spec_normalized.find(dataset_name);
+    if (norm_itr != roi.int_spec_normalized.end())
+    {
+        return std::shared_ptr<ArrayDr>((ArrayDr*)&(norm_itr->second), [](ArrayDr*) {});
+    }
+    auto itr = roi.int_spec.find(dataset_name);
+    if (itr != roi.int_spec.end())
+    {
+        // No log here: normalize_int_spec_by_elt already warned once, at the point where the
+        // reason is known. This runs for every roi on every model_updated(), so warning again
+        // just buries that message.
+        return std::shared_ptr<ArrayDr>((ArrayDr*)&(itr->second), [](ArrayDr*) {});
+    }
+    return nullptr;
+}
+
 //---------------------------------------------------------------------------
 
 MapsElementsWidget::MapsElementsWidget(int rows, int cols, bool compact_view, bool create_image_nav, bool restore_floating, QWidget* parent)
@@ -1702,12 +1724,11 @@ void MapsElementsWidget::model_updated()
         gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(QString(itr.first.c_str()), itr.second.color, itr.second.color_alpha, width, height, itr.second.pixel_list);
         roi->setRenderScale(m_imageViewWidget->renderScaleAt(0));
         insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, roi);
-        if (itr.second.int_spec.count(_model->getDatasetName().toStdString()) > 0)
+        // plot roi int spec
+        std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(itr.second, _model->getDatasetName().toStdString());
+        if (roi_spec != nullptr)
         {
-            // plot roi int spec
-            // non-owning: this Spectra lives inside _model's Map_ROI storage, not on our heap
-            ArrayDr* model_owned_spec = (ArrayDr*)&(itr.second.int_spec.at(_model->getDatasetName().toStdString()));
-            _spectra_widget->appendROISpectra(itr.first, std::shared_ptr<ArrayDr>(model_owned_spec, [](ArrayDr*) {}), itr.second.color);
+            _spectra_widget->appendROISpectra(itr.first, roi_spec, itr.second.color);
         }
     }
 
@@ -2053,14 +2074,22 @@ void MapsElementsWidget::on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*
             insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, copy);
             std::vector<std::pair<int, int>> pixel_list;
             itr->to_roi_vec(pixel_list);
-            auto int_spectra = std::make_shared<data_struct::Spectra<double>>();
+            data_struct::Spectra<double> int_spectra;
             std::unordered_map<std::string, double> scaler_maps;
-            if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, int_spectra.get(), scaler_maps))
+            if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, &int_spectra, scaler_maps))
             {
-                struct Map_ROI roi(itr->getName().toStdString(), itr->getColor(), itr->alphaValue(), pixel_list, _model->getDatasetName().toStdString(), *int_spectra, scaler_maps);
+                std::string roi_f_name = _model->getDatasetName().toStdString();
+                std::string roi_name = itr->getName().toStdString();
+                struct Map_ROI roi(roi_name, itr->getColor(), itr->alphaValue(), pixel_list, roi_f_name, int_spectra, scaler_maps);
 
-                _model->appendMapRoi(itr->getName().toStdString(), roi);
-                _spectra_widget->appendROISpectra(itr->getName().toStdString(), int_spectra, itr->getColor());
+                // plot the elapsed live time normalized spectra off the copy the model now owns,
+                // the local roi above goes out of scope at the end of this iteration
+                const Map_ROI& model_roi = _model->appendMapRoi(roi_name, roi);
+                std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(model_roi, roi_f_name);
+                if (roi_spec != nullptr)
+                {
+                    _spectra_widget->appendROISpectra(roi_name, roi_spec, itr->getColor());
+                }
 
                 /*
                  // duplicate , need to normalize to a function
@@ -2561,8 +2590,8 @@ void MapsElementsWidget::on_export_images()
 
                     out_stream << "\n";
                     // check if there are any ROI's and export them
-                    const std::unordered_map<std::string, Map_ROI> rois = _model->get_map_rois();
-                    for (auto itr_roi : rois)
+                    const std::unordered_map<std::string, Map_ROI>& rois = _model->get_map_rois();
+                    for (const auto& itr_roi : rois)
                     {
                         out_stream << "ROI: "<<itr_roi.first<<"\n";
                         for (auto& p_itr : itr_roi.second.pixel_list)
