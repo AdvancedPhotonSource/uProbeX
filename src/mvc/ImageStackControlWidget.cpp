@@ -314,7 +314,16 @@ void ImageStackControlWidget::onUnloadList_Model(const QStringList sl, MODEL_TYP
 {
 	disconnect(_image_name_cb, &QComboBox::currentTextChanged, this, &ImageStackControlWidget::model_IndexChanged);
 
+    // All three display widgets have to be detached, not just the H5 one.
+    // _raw_model_map and _vlm_model_map own their models through
+    // MapsWorkspaceModel, so the unload below really frees them, and
+    // model_IndexChanged() does nothing at all when the new current text
+    // matches no map - which is exactly the case after unloading the last
+    // dataset. _mda_widget and _vlm_widget were left pointing at freed
+    // models, reachable from any click in either widget.
     _imageGrid->setModel(nullptr);
+    _mda_widget->setModel(nullptr);
+    _vlm_widget->setModel(nullptr);
     foreach (QString s, sl)
     {
 		switch (mt)
