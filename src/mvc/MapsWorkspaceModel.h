@@ -173,6 +173,11 @@ private:
 
     std::map<QString, QFileInfo> _h5_fileinfo_list;
     std::map<QString, QFileInfo> _raw_fileinfo_list;
+
+    // Scratch targets for the two load() jobs that both feed _raw_fileinfo_list.
+    // Each pool thread writes only its own map; load() merges them in.
+    std::map<QString, QFileInfo> _raw_scan_fileinfo_scratch;
+    std::map<QString, QFileInfo> _mda_fileinfo_scratch;
     std::map<QString, QFileInfo> _vlm_fileinfo_list;
     std::map<QString, QFileInfo> _roi_fileinfo_list;
     std::map<QString, QFileInfo> _region_links_fileinfo_list;

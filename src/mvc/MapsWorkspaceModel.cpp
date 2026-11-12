@@ -178,8 +178,16 @@ void MapsWorkspaceModel::load(QString filepath)
                     QCoreApplication::processEvents();
                 }
             }
-            job_queue[0] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, ".", _raw_suffex, &_raw_fileinfo_list, check_raw_h5, false);
-            job_queue[1] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "mda", _mda_suffex, &_raw_fileinfo_list, check_raw_mda, false);
+            // Jobs 0 and 1 used to emplace into _raw_fileinfo_list from two pool threads at
+            // once. std::map insertion is not thread safe and the two rebalance the same
+            // tree, and on top of that get_raw_file_list() handed the GUI a reference to
+            // that map while both were running. Each job now fills its own map and this
+            // thread merges the result in when the job reports done, so _raw_fileinfo_list
+            // is only ever touched here.
+            _raw_scan_fileinfo_scratch.clear();
+            _mda_fileinfo_scratch.clear();
+            job_queue[0] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, ".", _raw_suffex, &_raw_scan_fileinfo_scratch, check_raw_h5, false);
+            job_queue[1] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "mda", _mda_suffex, &_mda_fileinfo_scratch, check_raw_mda, false);
             job_queue[2] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "vlm", _vlm_suffex, &_vlm_fileinfo_list, check_vlm, false);
             job_queue[3] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "img.dat", _all_h5_suffex, &_h5_fileinfo_list, check_imgdat_h5, false);
             job_queue[4] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "rois", _all_roi_suffex, &_roi_fileinfo_list, check_roi, false);
@@ -202,11 +210,15 @@ void MapsWorkspaceModel::load(QString filepath)
                         {
                         case 0:
                             _is_raw_loaded = itr.second.get();
+                            // The job is finished, so this merge and every reader of
+                            // _raw_fileinfo_list are now on the same thread.
+                            _raw_fileinfo_list.insert(_raw_scan_fileinfo_scratch.begin(), _raw_scan_fileinfo_scratch.end());
                             to_delete.push_back(itr.first);
                             emit doneLoadingRAW();
                             break;
                         case 1:
                             _is_raw_loaded = itr.second.get();
+                            _raw_fileinfo_list.insert(_mda_fileinfo_scratch.begin(), _mda_fileinfo_scratch.end());
                             to_delete.push_back(itr.first);
                             emit doneLoadingMDA();
                             break;
@@ -304,6 +316,8 @@ void MapsWorkspaceModel::unload()
 
     _fit_params_override_dict.clear();
     _raw_fileinfo_list.clear();
+    _raw_scan_fileinfo_scratch.clear();
+    _mda_fileinfo_scratch.clear();
     _vlm_fileinfo_list.clear();
     _h5_fileinfo_list.clear();
     _roi_fileinfo_list.clear();
