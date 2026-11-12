@@ -148,6 +148,13 @@ void ImageViewWidgetCompact::createLayout()
     _unit_textitems.clear();
     _raw_data_items.clear();
     _sub_window.scene->clear();
+    // clear() deleted every item, so the scene's static-item list and its
+    // default pixmap pointer are now dangling. Without this, each relayout
+    // left another generation of freed pointers in that list, and
+    // removeAllAnnotationItems() decides what is static by comparing raw
+    // pointers against it - a recycled address there silently keeps a live
+    // annotation attached to the scene.
+    _sub_window.scene->clearStaticItems();
     _scale_bar_line = nullptr;
     _scale_bar_text = nullptr;
 

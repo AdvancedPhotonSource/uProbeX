@@ -307,18 +307,28 @@ void ImageViewScene::modelSelectionChanged(const QItemSelection& selected,
 
    clearFocus();
 
+   // isValid() does not imply a non-null internal pointer: a top-level index
+   // built with an invalid parent carries none, and indexes left over from a
+   // model that has since been swapped carry a stale one. setSelected() is
+   // virtual, so a null here is a null vtable dispatch.
    foreach (QModelIndex dIndex, deselected.indexes())
    {
       AbstractGraphicsItem* item =
             (AbstractGraphicsItem*)(dIndex.internalPointer());
-      item->setSelected(false);
+      if (item != nullptr)
+      {
+         item->setSelected(false);
+      }
    }
 
    foreach (QModelIndex sIndex, selected.indexes())
    {
       AbstractGraphicsItem* item =
             (AbstractGraphicsItem*)(sIndex.internalPointer());
-      item->setSelected(true);
+      if (item != nullptr)
+      {
+         item->setSelected(true);
+      }
    }
 
    connect(m_selectionModel, &QItemSelectionModel::selectionChanged, this, &ImageViewScene::modelSelectionChanged);
@@ -333,7 +343,11 @@ void ImageViewScene::removeDefaultPixmap()
 {
    if(m_pixItem != nullptr)
    {
-      this->removeItem(m_pixItem); 
+      this->removeItem(m_pixItem);
+      // It was registered as a static item at construction; dropping it from
+      // the list here keeps removeAllAnnotationItems() from comparing against
+      // a freed pointer.
+      _static_item_list.removeAll(m_pixItem);
       delete m_pixItem;
       m_pixItem = nullptr;
       setSceneRect(0,0,1024,1024);
@@ -397,18 +411,31 @@ void ImageViewScene::mousePressEvent(QGraphicsSceneMouseEvent* event)
    // Left click and mode is ZoomIn
    if ((event -> button() == Qt::LeftButton) && (m_mode == ZoomIn))
    {
-      // Get attached view
-      QGraphicsView* view = qobject_cast<QGraphicsView*>(
-         event -> widget() -> parent());
-      Q_ASSERT(view);
-      // Construct a rubber band object for the view.
-      m_zoomSelection = new QRubberBand(QRubberBand::Rectangle,
-                                        view -> viewport());
-      m_zoomOrigin = view -> mapFromScene(event -> scenePos());
+      // Get attached view. widget() is null for any event not delivered
+      // through a viewport - synthesized events, gesture synthesis, a direct
+      // QGraphicsScene::sendEvent - and Q_ASSERT compiles to nothing in
+      // release, so both this and the cast result have to be checked.
+      QGraphicsView* view = nullptr;
+      if (event -> widget() != nullptr)
+      {
+         view = qobject_cast<QGraphicsView*>(event -> widget() -> parent());
+      }
+      if (view != nullptr)
+      {
+         // Construct a rubber band object for the view. A press without an
+         // intervening release would otherwise leak the previous one.
+         if (m_zoomSelection != nullptr)
+         {
+            delete m_zoomSelection;
+         }
+         m_zoomSelection = new QRubberBand(QRubberBand::Rectangle,
+                                           view -> viewport());
+         m_zoomOrigin = view -> mapFromScene(event -> scenePos());
 
-      // Store the size of rubber band rectangle in a QRectF object.
-      m_zoomRect = QRectF(m_zoomOrigin, m_zoomOrigin);
-      QGraphicsScene::mousePressEvent(event);
+         // Store the size of rubber band rectangle in a QRectF object.
+         m_zoomRect = QRectF(m_zoomOrigin, m_zoomOrigin);
+         QGraphicsScene::mousePressEvent(event);
+      }
    }
 
    // Left click and mode is ZoomOut
@@ -635,7 +662,11 @@ void ImageViewScene::setPixmap(const QPixmap& p)
 
 void ImageViewScene::clearStaticItems()
 {
+   // Call this after QGraphicsScene::clear(), which deletes every item the
+   // list points at - including m_pixItem, which is registered as a static
+   // item when the scene is built.
    _static_item_list.clear();
+   m_pixItem = nullptr;
 }
 
 //---------------------------------------------------------------------------
