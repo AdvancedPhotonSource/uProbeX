@@ -81,6 +81,30 @@ ScanRegionGraphicsItem* ScanRegionGraphicsItem::cloneRegion()
 
 //---------------------------------------------------------------------------
 
+AbstractGraphicsItem* ScanRegionGraphicsItem::duplicate()
+{
+
+   ScanRegionGraphicsItem* item = new ScanRegionGraphicsItem();
+
+   QColor color(m_outlineColorProp->getValue().toString());
+   item->setColor(color);
+   item->setPos(pos());
+   item->setSameRect(m_rect);
+
+   item->setMouseOverPixelCoordModel(m_mouseOverPixelCoordModel);
+   item->setLightToMicroCoordModel(m_lightToMicroCoordModel);
+
+   // _bs_plan is deliberately not copied. The duplicate is a new, unqueued
+   // region: two items sharing one uuid would both match in updatePlan() and
+   // removePlan(), and whichever was destroyed first would emit planRemoved
+   // and cancel the other one's queued scan.
+
+   return item;
+
+}
+
+//---------------------------------------------------------------------------
+
 void ScanRegionGraphicsItem::setPlan(const BlueskyPlan& plan)
 {
 

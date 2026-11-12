@@ -68,9 +68,17 @@ public:
     * @param uProbeRegion
     * @return
     */
-   virtual ScanRegionGraphicsItem* cloneRegion();
+   ScanRegionGraphicsItem* cloneRegion() override;
 
-   const QString displayName() const;
+   /**
+    * @brief duplicate : Overridden because the inherited
+    * UProbeRegionGraphicsItem::duplicate() returns a plain
+    * UProbeRegionGraphicsItem. That put a base object into the microprobe
+    * tree, where everything that walks the tree expects the derived type.
+    */
+   AbstractGraphicsItem* duplicate() override;
+
+   const QString displayName() const override;
 
    void setPlan(const BlueskyPlan& plan);
 
