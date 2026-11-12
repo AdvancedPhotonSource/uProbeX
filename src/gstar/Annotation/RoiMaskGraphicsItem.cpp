@@ -158,9 +158,16 @@ RoiMaskGraphicsItem::~RoiMaskGraphicsItem()
 
 void RoiMaskGraphicsItem::_init(QColor color, int alpha)
 {
-    _cursor.setWidth(10.);
-    _cursor.setHeight(10.);
-    _cursor.setColor(Qt::gray);
+    // Parented to this item rather than added to the scene directly, so it
+    // comes and goes with its owner and is deleted exactly once.
+    _cursor = new RectItem(0.0, 0.0, 10.0, 10.0, this);
+    _cursor->setColor(Qt::gray);
+    // It is a brush cursor, not something the user can grab. Leaving it
+    // selectable also put a non-AbstractGraphicsItem into selectedItems(),
+    // which ImageViewScene::sceneSelectionChanged() casts without checking.
+    _cursor->setFlag(QGraphicsItem::ItemIsMovable, false);
+    _cursor->setFlag(QGraphicsItem::ItemIsSelectable, false);
+    _cursor->setVisible(false);
 
     setFlags(ItemIsSelectable);
     setAcceptHoverEvents(true);
@@ -615,8 +622,9 @@ void RoiMaskGraphicsItem::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
         }
         */
     }
-   _cursor.setPos(spos);
-   //_cursor.setPos(event->scenePos());
+   // spos is in scene coordinates; _cursor is a child of this item, so it is
+   // positioned in this item's coordinates.
+   _cursor->setPos(mapFromScene(spos));
    QGraphicsItem::mouseMoveEvent(event);
 }
 
@@ -635,8 +643,7 @@ void RoiMaskGraphicsItem::onMouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 
 void RoiMaskGraphicsItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event)
 {
-    //_cursor.setPos(event->scenePos());
-    this->scene()->addItem(&_cursor);
+    _cursor->setVisible(true);
     update(boundingRect());
 }
 
@@ -644,7 +651,7 @@ void RoiMaskGraphicsItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event)
 
 void RoiMaskGraphicsItem::hoverLeaveEvent(QGraphicsSceneHoverEvent* event)
 {
-    this->scene()->removeItem(&_cursor);
+    _cursor->setVisible(false);
     update(boundingRect());
 }
 
@@ -663,8 +670,8 @@ void RoiMaskGraphicsItem::setBrushSize(QSize brushSize)
     _brush_size = brushSize;
     double w = (double)(brushSize.width());
     double h = (double)(brushSize.height());
-    _cursor.setWidth(w); 
-    _cursor.setHeight(h);
+    _cursor->setWidth(w);
+    _cursor->setHeight(h);
 }
 
 //-----------------------------------------------------------------------------

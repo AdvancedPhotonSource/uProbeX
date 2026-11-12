@@ -173,7 +173,10 @@ protected:
 
     bool _mouse_down;
 
-    RectItem _cursor;
+    // Child item, so Qt's parent/child ownership destroys it with this object.
+    // It must not be a by-value member: it is shown by parenting it into the
+    // scene, and QGraphicsScene deletes the items it holds.
+    RectItem* _cursor;
 };
 
 }
