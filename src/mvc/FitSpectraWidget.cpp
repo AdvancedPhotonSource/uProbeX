@@ -75,8 +75,9 @@ FitSpectraWidget::FitSpectraWidget(QWidget* parent) : QWidget(parent)
 
     createLayout();
 
-    _spectra_background.resize(10);
-    _spectra_background.Zero(10);
+    // setZero, not Zero: Zero() is a static factory, so "_spectra_background.Zero(10)"
+    // built a temporary and threw it away, leaving the resized array uninitialized.
+    _spectra_background.setZero(10);
     connect(this, &FitSpectraWidget::signal_finished_fit, this, &FitSpectraWidget::finished_fitting);
 
 
