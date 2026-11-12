@@ -155,8 +155,9 @@ protected:
    // _elements_to_fit is a non-owning alias into whichever of the two is currently active.
    std::unique_ptr<data_struct::Fit_Element_Map_Dict<double>> _owned_elements_to_fit;
 
-   // Owns peaks added via add_custom_peak_pressed(); freed on removal in del_element() or on destruction.
-   std::vector<std::unique_ptr<data_struct::Fit_Element_Map<double>>> _custom_peaks;
+   // Peaks added via add_custom_peak_pressed(). Ownership is shared with the row the table
+   // model holds, so a peak lives until both this vector and that row have dropped it.
+   std::vector<std::shared_ptr<data_struct::Fit_Element_Map<double>>> _custom_peaks;
 
    //MapsH5Model* _h5_model;
 

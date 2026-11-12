@@ -860,7 +860,7 @@ void FitSpectraWidget::add_element()
         }
     }
 	
-    data_struct::Fit_Element_Map<double>* fit_element = gen_element_map<double>(el_name.toStdString());
+    std::shared_ptr<data_struct::Fit_Element_Map<double>> fit_element = gen_element_map<double>(el_name.toStdString());
     if(fit_element != nullptr)
     {
 		if (_param_override != nullptr)
@@ -914,26 +914,17 @@ void FitSpectraWidget::del_element()
 
             if( fit_element != nullptr )
             {
-                bool freed = false;
-                if( _elements_to_fit != nullptr && _elements_to_fit->find(fit_element->full_name()) != _elements_to_fit->end() )
+                // Drop our references to the element; the shared_ptr held by the
+                // table model row goes away with removeRows() below.
+                if( _elements_to_fit != nullptr )
                 {
-                    Fit_Element_Map<double>* el = (*_elements_to_fit)[fit_element->full_name()];
                     _elements_to_fit->erase(fit_element->full_name());
-                    if(el != nullptr)
-                    {
-                        delete el;
-                        freed = true;
-                    }
                 }
-                if(!freed)
+                auto it = std::find_if(_custom_peaks.begin(), _custom_peaks.end(),
+                    [fit_element](const std::shared_ptr<data_struct::Fit_Element_Map<double>>& p) { return p.get() == fit_element; });
+                if(it != _custom_peaks.end())
                 {
-                    // not in _elements_to_fit -- may be a custom peak we own directly
-                    auto it = std::find_if(_custom_peaks.begin(), _custom_peaks.end(),
-                        [fit_element](const std::unique_ptr<data_struct::Fit_Element_Map<double>>& p) { return p.get() == fit_element; });
-                    if(it != _custom_peaks.end())
-                    {
-                        _custom_peaks.erase(it);
-                    }
+                    _custom_peaks.erase(it);
                 }
             }
 			_spectra_widget->set_element_lines(nullptr, 0);
@@ -965,8 +956,8 @@ void FitSpectraWidget::add_custom_peak_pressed()
     {
         QString name = _custon_peak_dialog.get_name();
         double center = _custon_peak_dialog.get_energy();
-        auto fit_element = std::make_unique<data_struct::Fit_Element_Map<double>>(name.toStdString(), center, 1.0);
-        _fit_elements_table_model->appendElement(fit_element.get());
+        auto fit_element = std::make_shared<data_struct::Fit_Element_Map<double>>(name.toStdString(), center, 1.0);
+        _fit_elements_table_model->appendElement(fit_element);
         _custom_peaks.push_back(std::move(fit_element));
     }
 }

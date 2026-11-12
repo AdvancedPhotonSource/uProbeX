@@ -106,7 +106,7 @@ data_struct::Fit_Element_Map_Dict<double> FitElementsTableModel::getElementsToFi
 	for (auto& itr : _nodes)
 	{
 		TreeItem* node = itr.second.get();
-		data_struct::Fit_Element_Map<double>*element = node->element_data;
+		const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element = node->element_data;
 		elements_to_fit[element->full_name()] = element;
 	}
 	return elements_to_fit;
@@ -120,7 +120,7 @@ data_struct::Fit_Parameters<double> FitElementsTableModel::getAsFitParams()
     for(auto& itr : _nodes)
     {
         TreeItem* node = itr.second.get();
-        data_struct::Fit_Element_Map<double>* element = node->element_data;
+        const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element = node->element_data;
         fit_params.add_parameter(data_struct::Fit_Param<double>(element->full_name(), 1.0e-10, 20.0, node->itemData[1].toDouble(), 0.0005, data_struct::E_Bound_Type::LIMITED_LO_HI));
     }
     return fit_params;
@@ -134,7 +134,7 @@ void FitElementsTableModel::updateElementValues(data_struct::Fit_Parameters<doub
     for(auto& itr : _nodes)
     {
         TreeItem* node = itr.second.get();
-        data_struct::Fit_Element_Map<double>* element = node->element_data;
+        const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element = node->element_data;
         if(fit_params->contains(element->full_name()))
         {
             node->itemData[1] = QVariant(fit_params->at(element->full_name()).value);
@@ -165,7 +165,11 @@ void FitElementsTableModel::updateFitElements(data_struct::Fit_Element_Map_Dict<
         _nodes.clear();
         for(auto& itr : *elements_to_fit)
         {
-            data_struct::Fit_Element_Map<double>* element = itr.second;
+            const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element = itr.second;
+            if(element == nullptr)
+            {
+                continue;
+            }
             if(data_struct::Element_Info_Map<double>::inst()->contains(element->symbol()))
             {
                 int idx = element->Z();
@@ -234,8 +238,12 @@ QString FitElementsTableModel::element_at_row(int row)
 
 //---------------------------------------------------------------------------
 
-void FitElementsTableModel::appendElement(data_struct::Fit_Element_Map<double>* element)
+void FitElementsTableModel::appendElement(const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element)
 {
+    if(element == nullptr)
+    {
+        return;
+    }
     if(data_struct::Element_Info_Map<double>::inst()->contains(element->symbol()))
     {
         int idx = element->Z();
@@ -552,7 +560,7 @@ bool FitElementsTableModel::getElementByIndex(QModelIndex index, data_struct::Fi
             childItem = childItem->parentItem;
             is_parent = false;
         }
-        *out_element = childItem->element_data;
+        *out_element = childItem->element_data.get();
         return true;
     }
     return false;
@@ -670,7 +678,7 @@ bool FitElementsTableModel::setData(const QModelIndex &index,
                             {
                                 node->itemData[RATIO] = QVariant(ratio_vec[index.row()].ratio);
                             }
-                            emit (braching_ratio_changed(node->parentItem->element_data));
+                            emit (braching_ratio_changed(node->parentItem->element_data.get()));
                         }
                     }
                 }
@@ -691,7 +699,7 @@ bool FitElementsTableModel::setData(const QModelIndex &index,
                         {
                             node->parentItem->element_data->set_width_multi(value.toDouble());
                             node->parentItem->element_data->init_energy_ratio_for_detector_element(data_struct::Element_Info_Map<double>::inst()->get_element(_detector_element));
-                            emit (width_multi_changed(node->parentItem->element_data, node->itemData[SYMBOL].toString()) );
+                            emit (width_multi_changed(node->parentItem->element_data.get(), node->itemData[SYMBOL].toString()) );
                         }
                     }
                 }

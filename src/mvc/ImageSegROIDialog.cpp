@@ -1088,11 +1088,9 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
         data_struct::Fit_Element_Map_Dict<double> elements_to_model = po->elements_to_fit;
 		data_struct::Fit_Parameters<double> fit_params = po->fit_params;
 
-        // elements_to_model starts as a copy of pointers owned by po, and the loop below adds
-        // elements we allocate ourselves. Deleting everything in the dict at the end would
-        // double free po's entries, so only the ones created here are owned, by this vector. It
-        // must outlive every use of elements_to_model, including the early returns below.
-        std::vector<std::unique_ptr<data_struct::Fit_Element_Map<double>>> owned_elements;
+        // elements_to_model starts as a copy of po's dict; its entries are shared_ptrs, so the
+        // elements we add below are kept alive by the dict itself and po's entries are left
+        // untouched when the dict goes out of scope.
 
         if(fit_params.size() == 0)
         {
@@ -1143,10 +1141,9 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                         Element_Info<double>* eptr = Element_Info_Map<double>::inst()->get_element(itr.first);
                         if(eptr != nullptr)
                         {
-                            auto em = std::make_unique<data_struct::Fit_Element_Map<double>>(itr.first, eptr);
+                            auto em = std::make_shared<data_struct::Fit_Element_Map<double>>(itr.first, eptr);
                             em->init_energy_ratio_for_detector_element(data_struct::Element_Info_Map<double>::inst()->get_element("Si")); // don't know how to look up
-                            elements_to_model[itr.first] = em.get();
-                            owned_elements.push_back(std::move(em));
+                            elements_to_model[itr.first] = std::move(em);
                         }
                         else
                         {
@@ -1193,7 +1190,6 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                     else
                     {
                         logW<<"Pixel out of range!\n";
-                        // owned_elements cleans up what this function allocated.
                         return;
                     }
                 }
@@ -1240,7 +1236,6 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
 				_pb_pixels->setValue(i);
 				QCoreApplication::processEvents();
             }
-            // owned_elements cleans up what this function allocated.
 			_pb_pixels->setValue(pixel_list.size());
 			QCoreApplication::processEvents();
         }
