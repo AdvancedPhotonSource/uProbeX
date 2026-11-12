@@ -121,9 +121,15 @@ void SubImageWindow::on_contrast_show()
 
     _contrast_dialog.setWindowTitle("Contrast");
     _contrast_dialog.set_array(counts_lookup->get_count_array());
-    connect(&_contrast_dialog, &ContrastDialog::on_min_max_update, this, &SubImageWindow::on_update_min_max);
-    connect(&_contrast_dialog, &ContrastDialog::accepted, this, &SubImageWindow::on_accept_contrast);
-    connect(&_contrast_dialog, &ContrastDialog::rejected, this, &SubImageWindow::on_cancel_contrast);
+    // Qt::UniqueConnection because this runs on every open of a dialog that
+    // lives as long as the window; without it the Nth open ran each slot N
+    // times, so one slider move triggered N full map redraws.
+    // These stay here rather than moving to the constructor: the move
+    // constructor default-constructs a fresh _contrast_dialog, so connections
+    // made at construction would not survive it.
+    connect(&_contrast_dialog, &ContrastDialog::on_min_max_update, this, &SubImageWindow::on_update_min_max, Qt::UniqueConnection);
+    connect(&_contrast_dialog, &ContrastDialog::accepted, this, &SubImageWindow::on_accept_contrast, Qt::UniqueConnection);
+    connect(&_contrast_dialog, &ContrastDialog::rejected, this, &SubImageWindow::on_cancel_contrast, Qt::UniqueConnection);
     _contrast_dialog.min_max_updated(false);
 
     _contrast_dialog.show();
