@@ -6,6 +6,7 @@
 #include <QVBoxLayout>
 #include <mvc/PolarXanesWidget.h>
 #include <QDesktopServices>
+#include <QSignalBlocker>
 
 //---------------------------------------------------------------------------
 
@@ -67,6 +68,15 @@ void PolarXanesWidget::setModel(std::shared_ptr<MapsH5Model> model)
     _model = model;
     if(model != nullptr)
     {
+        // Block both combos while they are rebuilt. Each clear() and addItem()
+        // emits currentTextChanged, which runs onSelecAnalysisOrElement() ->
+        // _plot_new_element() against whatever the other combo happens to hold
+        // mid-rebuild, so loading a dataset cleared and redrew the plot once
+        // per analysis type and once per element. The single correct plot is
+        // drawn at the end of this function.
+        const QSignalBlocker block_analysis(_cb_analysis);
+        const QSignalBlocker block_elements(_cb_elements);
+
         _cb_analysis->clear();
         _cb_elements->clear();
         std::vector<std::string> analysis_types = _model->getAnalyzedTypes();
