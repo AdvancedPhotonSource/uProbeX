@@ -489,7 +489,11 @@ private:
    void _createSolver();
 
 
-   VLM_Model* _model;
+   // Initialized here, not in _init(): two of the three constructors never
+   // assign it, so "if (_model == nullptr)" in windowChanged() and the
+   // microprobe context menu handlers was testing indeterminate stack
+   // garbage, which passes the guard and then dereferences.
+   VLM_Model* _model = nullptr;
 
    /**
     * @brief m_addCalibrationAction
@@ -696,7 +700,12 @@ private:
 
    std::unique_ptr<ScanRegionLinkDialog> _scan_region_link_dialog;
 
-   ScanRegionDialog* _scan_dialog;
+   // Same, and it cannot be cleared in _init(): the ScanRegionDialog*
+   // constructor assigns it before calling _init(), so a reset there would
+   // throw the dialog away. Only that one constructor sets it; the other two
+   // left it indeterminate for the "if (_scan_dialog != nullptr)" test in
+   // the Queue Scan action.
+   ScanRegionDialog* _scan_dialog = nullptr;
 
    std::unique_ptr<MapsH5Model> _live_h5model;
 
