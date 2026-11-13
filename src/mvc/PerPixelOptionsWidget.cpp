@@ -21,6 +21,9 @@ PerPixelOptionsWidget::PerPixelOptionsWidget(QWidget *parent) : QWidget(parent)
     _canceled = false;
     status_callback_func = std::bind(&PerPixelOptionsWidget::status_callback, this, std::placeholders::_1, std::placeholders::_2);
     createLayout();
+    // Auto connection: status_callback() emits this from the fitting thread, so it
+    // is delivered as a queued event and onStatusUpdate() runs on the GUI thread.
+    connect(this, &PerPixelOptionsWidget::statusUpdate, this, &PerPixelOptionsWidget::onStatusUpdate);
 
 }
 
@@ -152,7 +155,27 @@ void PerPixelOptionsWidget::onCancel()
 
 //---------------------------------------------------------------------------
 
+// Runs on the fitting thread.
 void PerPixelOptionsWidget::status_callback(size_t cur_block, size_t total_blocks)
+{
+    if (_canceled.load())
+    {
+        throw 20;
+    }
+
+    // This used to drive the progress bars directly and then call processEvents() to
+    // repaint them, all on the GUI thread. That pumped the whole event queue from deep
+    // inside the fit, so a close delivered there destroyed the widget - and the owning
+    // MapsWorkspaceFilesWidget with it - while process_dataset_files() was still on the
+    // stack holding "this". The fit now runs on its own thread and the bars are updated
+    // through a queued signal, so no event is ever delivered from inside the fit.
+    emit statusUpdate(static_cast<qulonglong>(cur_block), static_cast<qulonglong>(total_blocks));
+}
+
+//---------------------------------------------------------------------------
+
+// Runs on the GUI thread.
+void PerPixelOptionsWidget::onStatusUpdate(qulonglong cur_block, qulonglong total_blocks)
 {
     if (_total_blocks != total_blocks)
     {
@@ -167,13 +190,6 @@ void PerPixelOptionsWidget::status_callback(size_t cur_block, size_t total_block
         _progressBarFiles->setValue(_cur_file-1);
     }
     _progressBarBlocks->setValue(_cur_block);
- 
-    if (_canceled)
-    {
-        throw 20;
-    }
-
-    QCoreApplication::processEvents();
 }
 
 //---------------------------------------------------------------------------
@@ -181,12 +197,14 @@ void PerPixelOptionsWidget::status_callback(size_t cur_block, size_t total_block
 void PerPixelOptionsWidget::setRunning()
 {
     _canceled = false;
+    _cur_file = 0;
+    _cur_block = 0;
+    _total_blocks = 0;
     _btn_run->setEnabled(false);
     _processing_grp->setEnabled(false);
     _saving_grp->setEnabled(false);
     _le_detectors->setEnabled(false);
     _file_list_view->setEnabled(false);
-    QCoreApplication::processEvents();
 }
 
 //---------------------------------------------------------------------------
@@ -201,7 +219,6 @@ void PerPixelOptionsWidget::setStoped()
     _saving_grp->setEnabled(true);
     _le_detectors->setEnabled(true);
     _file_list_view->setEnabled(true);
-    QCoreApplication::processEvents();
 }
 
 //---------------------------------------------------------------------------
