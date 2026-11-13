@@ -19,11 +19,18 @@ BatchRoiFitWidget::BatchRoiFitWidget(std::string directory, QWidget *parent) : Q
     _directory = directory;
     _total_itr = 0;
     _canceled = false;
+    _worker = nullptr;
     if (_directory[directory.length() - 1] != DIR_END_CHAR)
     {
         _directory += DIR_END_CHAR;
     }
     createLayout();
+
+    // Auto connections: status_callback() and the file loop emit these from the
+    // fitting thread, so they are delivered as queued events and the slots run on
+    // the GUI thread.
+    connect(this, &BatchRoiFitWidget::blockProgress, this, &BatchRoiFitWidget::onBlockProgress);
+    connect(this, &BatchRoiFitWidget::fileProgress, this, &BatchRoiFitWidget::onFileProgress);
 
 }
 
@@ -32,7 +39,8 @@ BatchRoiFitWidget::BatchRoiFitWidget(std::string directory, QWidget *parent) : Q
 BatchRoiFitWidget::~BatchRoiFitWidget()
 {
 
- 
+    stopProcessing();
+
 }
 
 //---------------------------------------------------------------------------
@@ -131,47 +139,54 @@ void BatchRoiFitWidget::updateFileList(std::unordered_map<QString, QFileInfo> ro
 
 //---------------------------------------------------------------------------
 
+// Runs on the fitting thread.
 void BatchRoiFitWidget::status_callback(size_t cur_itr, size_t total_itr)
 {
-    if (_canceled)
+    if (_canceled.load())
     {
         throw 20;
     }
 
+    // This used to drive the progress bar directly and then call processEvents() to
+    // repaint it, all on the GUI thread. See the comment on runProcessing() for why
+    // that was fatal.
+    emit blockProgress(static_cast<qulonglong>(cur_itr), static_cast<qulonglong>(total_itr));
+}
+
+//---------------------------------------------------------------------------
+
+// Runs on the GUI thread.
+void BatchRoiFitWidget::onBlockProgress(qulonglong cur_itr, qulonglong total_itr)
+{
     if (_total_itr != total_itr)
     {
         _total_itr = total_itr;
         _progressBarBlocks->setRange(0, _total_itr);
     }
 
-    /*
-    if (cur_itr == _total_itr)
-    {
-        int val = _progressBarFiles->value() + 1;
-        _progressBarFiles->setValue(val);
-        
-    }
-    */
-
     _progressBarBlocks->setValue(cur_itr);
-    QCoreApplication::processEvents();
+}
+
+//---------------------------------------------------------------------------
+
+// Runs on the GUI thread.
+void BatchRoiFitWidget::onFileProgress(qulonglong cur_file)
+{
+    _progressBarFiles->setValue(cur_file);
 }
 
 
 //---------------------------------------------------------------------------
 
-void BatchRoiFitWidget::runProcessing()
+// Reads every widget the fit needs. GUI thread only. Returns false and leaves
+// _analysis_job null if the detector field cannot be parsed.
+bool BatchRoiFitWidget::buildAnalysisJob()
 {
-    _btn_run->setEnabled(false);
-    _le_detectors->setEnabled(false);
-    _file_list_view->setEnabled(false);
-    _canceled = false;
-    QCoreApplication::processEvents();
-    data_struct::Analysis_Job<double> analysis_job;
+    _analysis_job = std::make_unique<data_struct::Analysis_Job<double>>();
+    data_struct::Analysis_Job<double>& analysis_job = *_analysis_job;
 
     //analysis_job.set_optimizer_algorithm();
 
-    //run in thread
     analysis_job.dataset_directory = _directory;
     analysis_job.output_dir = _directory;
     if (_optimizer_widget->isHybrid())
@@ -214,7 +229,8 @@ void BatchRoiFitWidget::runProcessing()
             catch (...)
             {
                 QMessageBox::warning(this, "Bad detectors", "Could not parse detectors. For range use 'num:max' ");
-                return;
+                _analysis_job.reset();
+                return false;
             }
         }
         else
@@ -226,88 +242,149 @@ void BatchRoiFitWidget::runProcessing()
             catch (...)
             {
                 QMessageBox::warning(this, "Bad detectors", "Could not parse detectors. Please enter number for single detector, or use ',' for list of detectors. ");
-                return;
+                _analysis_job.reset();
+                return false;
             }
         }
     }
     else
     {
         QMessageBox::warning(this, "No detectors listed", "Please enter detctors ',' separated");
-        return;
+        _analysis_job.reset();
+        return false;
     }
-    
-    Callback_Func_Status_Def cb_func = std::bind(&BatchRoiFitWidget::status_callback, this, std::placeholders::_1, std::placeholders::_2);
-    // TODO: will need to update to fitting routes instead of getting fit parameters
 
+    // TODO: will need to update to fitting routes instead of getting fit parameters
     analysis_job.fitting_routines.push_back(Fitting_Routines::NNLS);
 
-    try
+    // lock all fit parameters except elastic/inelastic amp and elements
+    analysis_job.optimize_fit_params_preset = fitting::models::Fit_Params_Preset::BATCH_FIT_NO_TAILS;
+    analysis_job.quantification_standard_filename = "maps_standardinfo.txt";
+
+    return true;
+}
+
+//---------------------------------------------------------------------------
+
+// The whole body of this used to run on the GUI thread, kept "responsive" by the
+// processEvents() in status_callback() and in the per file loop. That pumped close
+// events from inside the fit: closing the workspace during a batch ROI fit destroys
+// the ImageStackControlWidget (WA_DeleteOnClose), and with it the
+// MapsWorkspaceFilesWidget that owns this widget's unique_ptr - so the fit carried
+// on writing through a freed "this" and eventually returned into a freed stack
+// frame. No null check can fix that; the work had to come off the GUI thread.
+void BatchRoiFitWidget::runProcessing()
+{
+    if (_worker != nullptr)
     {
-        if (io::file::init_analysis_job_detectors(&analysis_job))
+        // Already fitting. The Run button is disabled while a fit is in flight, but
+        // the signal can still arrive from elsewhere.
+        return;
+    }
+
+    // Parse before disabling anything: the old code disabled the controls first and
+    // then returned on a bad detector string, leaving the window permanently dead.
+    if (false == buildAnalysisJob())
+    {
+        return;
+    }
+
+    _btn_run->setEnabled(false);
+    _le_detectors->setEnabled(false);
+    _file_list_view->setEnabled(false);
+    _canceled = false;
+
+    const int proc_total = static_cast<int>(_roi_map.size() * _analysis_job->detector_num_arr.size());
+    _progressBarFiles->setRange(0, proc_total);
+    _progressBarBlocks->setRange(0, _total_itr);
+    _progressBarBlocks->setValue(0);
+    _progressBarFiles->setValue(0);
+
+    data_struct::Analysis_Job<double>* analysis_job = _analysis_job.get();
+    // Copied, not captured by reference: updateFileList() can replace _roi_map from
+    // the GUI thread while the fit is reading it.
+    std::vector<std::string> roi_files;
+    roi_files.reserve(_roi_map.size());
+    for (const auto& itr : _roi_map)
+    {
+        roi_files.push_back(itr.second.fileName().toStdString());
+    }
+
+    BatchRoiFitWidget* self = this;
+    _worker = QThread::create([self, analysis_job, roi_files]()
+    {
+        Callback_Func_Status_Def cb_func = std::bind(&BatchRoiFitWidget::status_callback, self, std::placeholders::_1, std::placeholders::_2);
+
+        try
         {
-            // lock all fit parameters except elastic/inelastic amp and elements
-        
-            analysis_job.optimize_fit_params_preset = fitting::models::Fit_Params_Preset::BATCH_FIT_NO_TAILS;
-        
-            int proc_total = _roi_map.size() * analysis_job.detector_num_arr.size();
-            _progressBarFiles->setRange(0, proc_total);
-            _progressBarBlocks->setRange(0, _total_itr);
-
-            _progressBarBlocks->setValue(0);
-            _progressBarFiles->setValue(0);
-
-            analysis_job.quantification_standard_filename = "maps_standardinfo.txt";
-            io::file::File_Scan::inst()->populate_netcdf_hdf5_files(analysis_job.dataset_directory);
-
-            if (analysis_job.quantification_standard_filename.length() > 0)
+            if (io::file::init_analysis_job_detectors(analysis_job))
             {
-                perform_quantification(&analysis_job, false);
-            }
+                io::file::File_Scan::inst()->populate_netcdf_hdf5_files(analysis_job->dataset_directory);
 
-            std::map<int, std::map<std::string, data_struct::Fit_Parameters<double>>> roi_fit_params;
-            int i = 0;
-            for (auto& itr : _roi_map)
-            {
-                i++;
-                optimize_single_roi(analysis_job, itr.second.fileName().toStdString(), roi_fit_params, &cb_func);
-                _progressBarFiles->setValue(i);
-                QCoreApplication::processEvents();
-            }
-
-            _progressBarBlocks->setValue(_total_itr);
-            _progressBarFiles->setValue(proc_total);
-
-            // save all to csv
-            for (auto detector_num : analysis_job.detector_num_arr)
-            {
-                std::string save_path = analysis_job.dataset_directory + "output/specfit_results" + std::to_string(detector_num) + ".csv";
-                std::string quant_save_path = analysis_job.dataset_directory + "output/specfit_results" + std::to_string(detector_num) + "_quantified.csv";
-                io::file::csv::save_v9_specfit(save_path, roi_fit_params.at(detector_num));
-                if (analysis_job.get_detector(detector_num)->quantification_standards.size() > 0)
+                if (analysis_job->quantification_standard_filename.length() > 0)
                 {
-                    io::file::csv::save_v9_specfit_quantified(quant_save_path, analysis_job.get_detector(detector_num), analysis_job.fitting_routines, roi_fit_params.at(detector_num));
+                    perform_quantification(analysis_job, false);
+                }
+
+                std::map<int, std::map<std::string, data_struct::Fit_Parameters<double>>> roi_fit_params;
+                qulonglong i = 0;
+                for (const auto& roi_file : roi_files)
+                {
+                    i++;
+                    optimize_single_roi(*analysis_job, roi_file, roi_fit_params, &cb_func);
+                    emit self->fileProgress(i);
+                }
+
+                // save all to csv
+                for (auto detector_num : analysis_job->detector_num_arr)
+                {
+                    std::string save_path = analysis_job->dataset_directory + "output/specfit_results" + std::to_string(detector_num) + ".csv";
+                    std::string quant_save_path = analysis_job->dataset_directory + "output/specfit_results" + std::to_string(detector_num) + "_quantified.csv";
+                    io::file::csv::save_v9_specfit(save_path, roi_fit_params.at(detector_num));
+                    if (analysis_job->get_detector(detector_num)->quantification_standards.size() > 0)
+                    {
+                        io::file::csv::save_v9_specfit_quantified(quant_save_path, analysis_job->get_detector(detector_num), analysis_job->fitting_routines, roi_fit_params.at(detector_num));
+                    }
                 }
             }
         }
-    }
-    catch (...)
-    {
-        // status_callback() throws 20 when the user presses Cancel, and
-        // optimize_single_roi() calls it from inside the fit loop above.
-        // Nothing between there and main() caught it, so cancelling a batch
-        // ROI fit called std::terminate and killed the application.
-        // PerPixelFitWidget and FittingDialog already wrap the identical
-        // call this way. Also covers roi_fit_params.at() throwing for a
-        // detector that produced no results.
-        logI << "Batch ROI fitting canceled\n";
-    }
-    
+        catch (...)
+        {
+            // status_callback() throws 20 when the user presses Cancel, and
+            // optimize_single_roi() calls it from inside the fit loop above.
+            // Nothing may escape QThread::run() either. Also covers
+            // roi_fit_params.at() throwing for a detector that produced no results.
+            logI << "Batch ROI fitting canceled\n";
+        }
+    });
 
+    connect(_worker, &QThread::finished, this, &BatchRoiFitWidget::onProcessingFinished);
+    _worker->start();
+}
+
+//---------------------------------------------------------------------------
+
+void BatchRoiFitWidget::onProcessingFinished()
+{
+    if (false == _canceled.load())
+    {
+        _progressBarBlocks->setValue(_progressBarBlocks->maximum());
+        _progressBarFiles->setValue(_progressBarFiles->maximum());
+    }
 
     _btn_run->setEnabled(true);
     _le_detectors->setEnabled(true);
     _file_list_view->setEnabled(true);
     _btn_cancel->setText("Close");
+
+    if (_worker != nullptr)
+    {
+        // deleteLater, not delete: this slot is reached from the thread object's own
+        // finished() signal.
+        _worker->deleteLater();
+        _worker = nullptr;
+    }
+    _analysis_job.reset();
 
     // open file location
     QDir tmp_dir(QString(_directory.c_str()));
@@ -317,6 +394,25 @@ void BatchRoiFitWidget::runProcessing()
         logE << "Failed to open dir " << tmp_dir.absolutePath().toStdString() << "\n";
     }
 
+}
+
+//---------------------------------------------------------------------------
+
+void BatchRoiFitWidget::stopProcessing()
+{
+    if (_worker == nullptr)
+    {
+        return;
+    }
+
+    _canceled = true;
+    // No processEvents() here. onProcessingFinished() will not run - we are most
+    // likely inside the destructor - so the thread object is deleted directly once
+    // it has stopped.
+    _worker->wait();
+    delete _worker;
+    _worker = nullptr;
+    _analysis_job.reset();
 }
 
 //---------------------------------------------------------------------------
