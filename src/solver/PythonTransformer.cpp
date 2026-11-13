@@ -179,6 +179,19 @@ void PythonTransformer::transformCommand(double inX,
    {
       logE<<ex.what();
    }
+   catch(const std::exception& ex)
+   {
+      // pybind11::cast_error derives from std::runtime_error, not error_already_set.
+      // .cast<pybind11::list>() throws it when my_transform returns a non-list, and the
+      // three .cast<double>() calls throw it for a list whose elements are not numbers -
+      // which the result.size() check above does not cover. This runs from a mouse move
+      // handler, so the throw reached the event loop and called std::terminate.
+      logE<<ex.what();
+   }
+   catch(...)
+   {
+      logE<<"Unknown error running the python transform\n";
+   }
 
 }
 
