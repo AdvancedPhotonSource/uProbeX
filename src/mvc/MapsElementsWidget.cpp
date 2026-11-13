@@ -71,6 +71,21 @@ static std::shared_ptr<ArrayDr> non_owning_roi_spectra(const Map_ROI& roi, const
     return nullptr;
 }
 
+// The spectra to fit for a roi: always the raw integrated counts, never the normalized copy.
+// Rois are shown normalized so that different dwell times are comparable on screen, but the fit
+// and the quantification after it work in counts and read the acquisition time off the Spectra -
+// and the normalized copy deliberately carries a live time of 1.0. Non owning, same lifetime
+// rules as non_owning_roi_spectra above.
+static std::shared_ptr<ArrayDr> non_owning_roi_raw_spectra(const Map_ROI& roi, const std::string& dataset_name)
+{
+    auto itr = roi.int_spec.find(dataset_name);
+    if (itr != roi.int_spec.end())
+    {
+        return std::shared_ptr<ArrayDr>((ArrayDr*)&(itr->second), [](ArrayDr*) {});
+    }
+    return nullptr;
+}
+
 //---------------------------------------------------------------------------
 
 MapsElementsWidget::MapsElementsWidget(int rows, int cols, bool compact_view, bool create_image_nav, bool restore_floating, QWidget* parent)
@@ -1725,10 +1740,11 @@ void MapsElementsWidget::model_updated()
         roi->setRenderScale(m_imageViewWidget->renderScaleAt(0));
         insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, roi);
         // plot roi int spec
-        std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(itr.second, _model->getDatasetName().toStdString());
+        const std::string roi_dataset_name = _model->getDatasetName().toStdString();
+        std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(itr.second, roi_dataset_name);
         if (roi_spec != nullptr)
         {
-            _spectra_widget->appendROISpectra(itr.first, roi_spec, itr.second.color);
+            _spectra_widget->appendROISpectra(itr.first, roi_spec, non_owning_roi_raw_spectra(itr.second, roi_dataset_name), itr.second.color);
         }
     }
 
@@ -2088,7 +2104,7 @@ void MapsElementsWidget::on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*
                 std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(model_roi, roi_f_name);
                 if (roi_spec != nullptr)
                 {
-                    _spectra_widget->appendROISpectra(roi_name, roi_spec, itr->getColor());
+                    _spectra_widget->appendROISpectra(roi_name, roi_spec, non_owning_roi_raw_spectra(model_roi, roi_f_name), itr->getColor());
                 }
 
                 /*

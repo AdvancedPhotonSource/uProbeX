@@ -756,9 +756,14 @@ void FitSpectraWidget::appendMaxChanSpectra(std::string name, std::shared_ptr<co
 
 //---------------------------------------------------------------------------
 
-void FitSpectraWidget::appendROISpectra(std::string name, std::shared_ptr<ArrayDr> spec, QColor color)
+void FitSpectraWidget::appendROISpectra(std::string name, std::shared_ptr<ArrayDr> display_spec, std::shared_ptr<ArrayDr> fit_spec, QColor color)
 {
-    _roi_spec_map[name] = spec;
+    _roi_spec_map[name] = display_spec;
+    // Fit the raw counts. The displayed copy is divided by elapsed live time
+    // and has its own live time reset to 1.0, so fitting it would optimize
+    // against count rates and then let quantification divide by a live time
+    // that is no longer the acquisition time.
+    _roi_fit_spec_map[name] = (fit_spec != nullptr) ? fit_spec : display_spec;
     _roi_spec_colors[name] = color;
 }
 
@@ -771,6 +776,7 @@ void FitSpectraWidget::deleteROISpectra(std::string name)
         // Do not resize/clear the array: these pointers are non-owning aliases into the
         // model's Map_ROI storage, so touching the data here destroys the model's spectra.
         _roi_spec_map.erase(name);
+        _roi_fit_spec_map.erase(name);
         _roi_spec_colors.erase(name);
         _spectra_widget->remove_spectra(QString(name.c_str()));
     }
@@ -788,6 +794,7 @@ void FitSpectraWidget::deleteAllROISpectra()
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
     }
     _roi_spec_map.clear();
+    _roi_fit_spec_map.clear();
     _roi_spec_colors.clear();
     replot_integrated_spectra(false);
 }
@@ -825,6 +832,7 @@ void FitSpectraWidget::clearROISpectra()
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
     }
     _roi_spec_map.clear();
+    _roi_fit_spec_map.clear();
     _roi_spec_colors.clear();
 }
 
@@ -1123,9 +1131,13 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
 
     roi_name = roiDialog.selectedROI();
     
-    if (_roi_spec_map.count(roi_name.toStdString()) > 0)
+    // _roi_fit_spec_map, not _roi_spec_map: fit the raw counts, not the live
+    // time normalized copy that is on screen. The arrays underneath are
+    // Spectra<double>, so the cast to Spectra below also recovers the real
+    // elapsed live time, which the normalized copy has set to 1.0.
+    if (_roi_fit_spec_map.count(roi_name.toStdString()) > 0)
     {
-        roi_spec = _roi_spec_map.at(roi_name.toStdString()).get();
+        roi_spec = _roi_fit_spec_map.at(roi_name.toStdString()).get();
     }
     else
     {
@@ -1138,9 +1150,11 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
 
     if(back_name != "SNIP Algorithm")
     {
-        if (_roi_spec_map.count(back_name.toStdString()) > 0)
+        // Same map as the roi above: a background subtracted from raw counts
+        // has to be raw counts.
+        if (_roi_fit_spec_map.count(back_name.toStdString()) > 0)
         {
-            back_spec = _roi_spec_map.at(back_name.toStdString()).get();
+            back_spec = _roi_fit_spec_map.at(back_name.toStdString()).get();
         }
         else
         {
