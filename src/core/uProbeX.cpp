@@ -1402,8 +1402,18 @@ void uProbeX::subWindowClosed(SubWindow* subWindow)
         return;
 
     m_subWindows.erase(i);
-    ////delete absWinCon;
-    absWinCon = nullptr;
+
+    // deleteLater(), not delete. We are called from SubWindow::closeEvent() by way
+    // of windowClosing(), so a plain delete here frees the window while its own
+    // closeEvent() is still on the stack and Qt's close handling returns into it.
+    // That is why the delete below it was commented out - but dropping it only
+    // traded the crash for a leak. QMdiSubWindow is hidden rather than deleted when
+    // closed (WA_DeleteOnClose is not set on these), so the window stayed alive as
+    // a hidden child of m_mdiArea, now unreachable from m_subWindows and therefore
+    // skipped by the delete loop in ~uProbeX. With it went its content widget and
+    // whatever that holds, so an analyzed dataset kept its HDF5 file open for the
+    // rest of the session even though ~uProbeX exists to close those.
+    absWinCon->deleteLater();
 
 }
 
