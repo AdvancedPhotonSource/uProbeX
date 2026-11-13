@@ -447,7 +447,10 @@ if (id == ID_LINEAR)
    else
    {
 #ifdef _BUILD_WITH_PYTHON_SUPPORT
-      PythonSolver* ps = new PythonSolver();
+      // Owned here until setImpl() takes it: every path out of the check below
+      // returns without reaching setImpl(), and the raw new leaked the solver each
+      // time the user picked a python solver that failed to initialize.
+      std::unique_ptr<PythonSolver> ps = std::make_unique<PythonSolver>();
 
       QString pythonFileName = Preferences::inst()->getValue(STR_PRF_PythonSolverName).toString();
       QFileInfo fileInfo = QFileInfo(pythonFileName);
@@ -462,12 +465,13 @@ if (id == ID_LINEAR)
       {
          logE << "Error reading options for python solver, reverting to NelderMeadSolver\n";
          QMessageBox::critical(nullptr, "uProbeX", "Error initializeing Python solver,  reverting to NelderMeadSolver");
+         // ID_LINEAR, so the recursion goes down the NelderMead branch and stops.
          Preferences::inst()->setValue(STR_PRF_SolverCheckedID, 0);
          _createSolver();
          return;
       }
       m_solverParameterParse->getOptions(dict_options);
-      m_solver->setImpl(ps);
+      m_solver->setImpl(ps.release());
 #else
       logE << "Python support was not built into this application, reverting to NelderMeadSolver\n";
       QMessageBox::critical(nullptr, "uProbeX", "Python support was not built into this application, reverting to NelderMeadSolver");
