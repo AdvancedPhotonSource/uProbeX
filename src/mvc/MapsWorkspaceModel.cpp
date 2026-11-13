@@ -501,7 +501,19 @@ std::shared_ptr<MapsH5Model> MapsWorkspaceModel::get_MapsH5_Model(QString name)
         QFileInfo fileInfo = _h5_fileinfo_list[name];
         if (model->load(fileInfo.absoluteFilePath()))
         {
-            QApplication::processEvents();
+            // There used to be a QApplication::processEvents() here. It bought one
+            // repaint between the H5 load and the region links, and it was wrong on
+            // both paths that reach this function.
+            //
+            // MapsWorkspaceFilesWidget::onOpenModel() runs this on a thread pool
+            // thread, and processEvents() dispatches the *calling* thread's events -
+            // a pool thread has no event loop, so there it did nothing at all.
+            //
+            // ImageStackControlWidget::onLoad_Model() runs it on the GUI thread,
+            // where it did pump the real queue: a close delivered here destroys the
+            // MapsWorkspaceController and with it this model, and the insert into
+            // _h5_models below then runs on freed memory.
+            //
             // Load region links
             _load_region_links(fileInfo.baseName(), model);
             
