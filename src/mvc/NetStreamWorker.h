@@ -9,6 +9,7 @@
 //---------------------------------------------------------------------------
 
 #include <QThread>
+#include <atomic>
 #include <zmq.hpp>
 #include "io/net/basic_serializer.h"
 #include <string>
@@ -64,7 +65,6 @@ public:
 public slots:
     void run() override
     {
-        _running = true;
         data_struct::Stream_Block_Ptr<float> new_packet;
         zmq::message_t token, message;
         zmq::recv_result_t res1, res2;
@@ -165,7 +165,13 @@ signals:
 
 protected:
 
-    bool _running;
+    // Atomic because stop() writes it from the GUI thread while run() reads it in its
+    // loop on the worker thread; a plain bool there is a data race. Set true here rather
+    // than on entry to run(), so a stop() that lands in the window between start() and
+    // the thread actually running is not overwritten and lost. A worker is constructed,
+    // started once and destroyed (LiveMapsElementsWidget.cpp:196-199), never restarted,
+    // so there is no second run() that would need it reset.
+    std::atomic<bool> _running{true};
 
     std::unique_ptr<zmq::socket_t> _zmq_socket;
 
