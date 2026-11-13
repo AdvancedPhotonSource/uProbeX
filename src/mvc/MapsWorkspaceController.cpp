@@ -46,6 +46,18 @@ void MapsWorkspaceController::imgWidgetClosed()
 	if (_imgStackControllWidget != nullptr)
 	{
 		_imgStackControllWidget->savePref();
+
+		// Teardown ordering. This runs inside the widget's closeEvent(), and
+		// WA_DeleteOnClose only posts a deleteLater(), so the widget outlives this
+		// call by the rest of the event loop iteration. controllerClosed() below
+		// reaches uProbeX::mapsControllerClosed(), which does "delete controller"
+		// and so destroys _mapsWorkspaceModel right now. Detaching the widget here,
+		// while both are still alive, is what keeps it from spending that window
+		// holding pointers into a freed model - and MapsWorkspaceFilesWidget's
+		// setModel() also waits out any thread pool job still running inside it.
+		//
+		// The widget cannot simply be deleted instead: we are on its own stack.
+		_imgStackControllWidget->setModel(nullptr);
 	}
 	_imgStackControllWidget = nullptr;
 	emit controllerClosed(this);

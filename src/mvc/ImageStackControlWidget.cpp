@@ -246,13 +246,37 @@ void ImageStackControlWidget::onNextFilePressed()
 
 //---------------------------------------------------------------------------
 
+// Passing nullptr detaches this widget from the workspace model completely, and
+// callers rely on that: MapsWorkspaceController destroys the model right after,
+// so anything still pointing into it here would be left dangling. It has to drop
+// more than _model - _raw_model_map and _vlm_model_map are raw pointers the model
+// owns through unique_ptr, and _imageGrid/_mda_widget/_vlm_widget hold the same
+// pointers - which is the same detach onUnloadList_Model() already does per file.
 void ImageStackControlWidget::setModel(MapsWorkspaceModel *model)
 {
+	if (_model == model)
+	{
+		return;
+	}
+
 	if(_model != nullptr)
 	{
 		disconnect(_imageGrid, &MapsElementsWidget::fit_params_updated, _model, &MapsWorkspaceModel::load_fit_params);
 		disconnect(_mda_widget, &MDA_Widget::fit_params_updated, _model, &MapsWorkspaceModel::load_fit_params);
+
+		// Emptying the combo box re-enters model_IndexChanged(), which would look
+		// up a name in maps that are about to be cleared.
+		disconnect(_image_name_cb, &QComboBox::currentTextChanged, this, &ImageStackControlWidget::model_IndexChanged);
+		_imageGrid->setModel(nullptr);
+		_mda_widget->setModel(nullptr);
+		_vlm_widget->setModel(nullptr);
+		_h5_model_map.clear();
+		_raw_model_map.clear();
+		_vlm_model_map.clear();
+		_image_name_cb->clear();
+		connect(_image_name_cb, &QComboBox::currentTextChanged, this, &ImageStackControlWidget::model_IndexChanged);
 	}
+
 	_model = model;
 	_mapsFilsWidget->clearLists();
 	_mapsFilsWidget->setModel(_model);
