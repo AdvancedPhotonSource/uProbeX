@@ -17,6 +17,11 @@ PythonTransformer::PythonTransformer(QString path,
                                      QString functionnName) : ITransformer()
 {
 
+   // Before the try, not inside it: PythonLoader::init() can throw, and the assignment
+   // used to sit after that call, so a loader failure left m_foundFuncs indeterminate
+   // rather than false.
+   m_foundFuncs = false;
+
    try
    {
       if(false == PythonLoader::inst()->isLoaded())
@@ -24,7 +29,6 @@ PythonTransformer::PythonTransformer(QString path,
          PythonLoader::inst()->init();
       }
 
-      m_foundFuncs = false;
       m_module = filename;
       m_funcName = functionnName;
 
@@ -93,6 +97,15 @@ bool PythonTransformer::foundFunctions()
 bool PythonTransformer::Init(QMap<QString, double> globalVars)
 {
 
+    // Report the constructor's failure. This used to return true unconditionally, and
+    // foundFunctions() has no callers anywhere in the tree, so a transformer whose
+    // script failed to load was indistinguishable from a working one and got installed
+    // into the coordinate model - where the first transform dereferenced a null m_func.
+    if(false == m_foundFuncs)
+    {
+        return false;
+    }
+
     if(!m_globalVars.empty())
         m_globalVars.clear();
 
@@ -138,6 +151,14 @@ void PythonTransformer::transformCommand(double inX,
    *outX = 0.0;
    *outY = 0.0;
    *outZ = 0.0;
+
+   // Belt and braces alongside Init() refusing to report success: this is called on
+   // every mouse move over the VLM image, so a null m_func here is a segfault per
+   // frame rather than a one-off.
+   if(m_func == nullptr)
+   {
+      return;
+   }
 
    try
    {

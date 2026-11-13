@@ -373,21 +373,28 @@ void VLM_Widget::_createLightToMicroCoords(int id)
 #endif
    }
 
-   if (lightTransformer->Init(allCoefs))
+   if (false == lightTransformer->Init(allCoefs))
    {
-      if (m_lightToMicroCoordModel != nullptr)
-      {
-         m_lightToMicroCoordModel->setTransformer(lightTransformer);
-      }
-      else
-      {
-         m_lightToMicroCoordModel = std::make_unique<gstar::CoordinateModel>(lightTransformer);
-      }
+      // Fall back rather than carry on with no transformer. The old code just warned and
+      // dropped lightTransformer on the floor, which left m_lightToMicroCoordModel either
+      // null or holding the nullptr set above - and _createSolver() immediately does
+      // m_lightToMicroCoordModel->getTransformer()->getAllCoef() with no check. A linear
+      // transformer keeps every downstream caller's assumption true; its Init() cannot
+      // fail and it carries its own default coefficients.
+      QMessageBox::critical(nullptr, "uProbeX", "Error initializing Transformer. Falling back to the linear transformer.");
+      logW << "Could not init Transformer, falling back to LinearCoordTransformer\n";
+      delete lightTransformer;
+      lightTransformer = new LinearCoordTransformer();
+      lightTransformer->Init(allCoefs);
+   }
+
+   if (m_lightToMicroCoordModel != nullptr)
+   {
+      m_lightToMicroCoordModel->setTransformer(lightTransformer);
    }
    else
    {
-      QMessageBox::critical(nullptr, "uProbeX", "Error initializeing Transformer!");
-      logW << "Could not init Transformer\n";
+      m_lightToMicroCoordModel = std::make_unique<gstar::CoordinateModel>(lightTransformer);
    }
 
    m_lightToMicroCoordWidget->setModel(m_lightToMicroCoordModel.get());
