@@ -12,6 +12,7 @@
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QMessageBox>
+#include <QPointer>
 #include <preferences/Preferences.h>
 #include "core/GlobalThreadPool.h"
 #include "core/str_defines.h"
@@ -22,6 +23,12 @@ MapsWorkspaceFilesWidget::MapsWorkspaceFilesWidget(QWidget* parent) : QWidget(pa
 {
 
 	_model = nullptr;
+    _open_type = MODEL_TYPE::MAPS_H5;
+    _open_total = 0;
+    _open_done = 0;
+    _open_cursor_set = false;
+    _open_poll_timer.setInterval(100);
+    connect(&_open_poll_timer, &QTimer::timeout, this, &MapsWorkspaceFilesWidget::_pollOpenJob);
     createLayout();
 
 }
@@ -30,6 +37,7 @@ MapsWorkspaceFilesWidget::MapsWorkspaceFilesWidget(QWidget* parent) : QWidget(pa
 
 MapsWorkspaceFilesWidget::~MapsWorkspaceFilesWidget()
 {
+    _waitForOpenJob();
 }
 
 //---------------------------------------------------------------------------
@@ -114,6 +122,13 @@ void MapsWorkspaceFilesWidget::createLayout()
 
 void MapsWorkspaceFilesWidget::setModel(MapsWorkspaceModel *model)
 {
+    // An open job captured the old model pointer and is calling into it right now.
+    // Swapping the model out from under it, and then the caller destroying it, is
+    // what the wait is here to prevent.
+    _waitForOpenJob();
+    _finishOpenBatch();
+    _open_queue.clear();
+
 	if (_model != nullptr)
 	{
         disconnect(_model, &MapsWorkspaceModel::doneLoadingMDA, this, &MapsWorkspaceFilesWidget::updatedMDA);
@@ -211,174 +226,326 @@ void MapsWorkspaceFilesWidget::setFileTabActionsEnabled(bool val)
 
 //---------------------------------------------------------------------------
 
+// This used to be a foreach over names_list that handed each analyzed file to the
+// thread pool and then span on QCoreApplication::processEvents() until the future
+// was ready. The pool job captured "this" and read _model through it, so a close
+// delivered inside that pump destroyed the widget and the controller's
+// MapsWorkspaceModel while the job was still running through both, and the rest of
+// the loop then ran on freed memory.
+//
+// It is now a state machine driven by the real event loop: one file at a time,
+// nothing pumps events, the pool job holds a model pointer captured by value
+// instead of reaching back through the widget, and setModel()/the destructor wait
+// for whatever is in flight.
 void MapsWorkspaceFilesWidget::onOpenModel(const QStringList& names_list, MODEL_TYPE mt)
 {
-    setFileTabActionsEnabled(false);
-    QCoreApplication::processEvents();
-    if (_model != nullptr)
+    if (_open_total > 0)
     {
-
-        int amt = names_list.count();
-        int cur = 0;
-
-        foreach(QString name, names_list)
+        // A batch is already draining. The file tab actions are disabled while one
+        // runs so this is not expected, but appending beats dropping the request -
+        // as long as the type matches, since each type reports to a different tab.
+        if (mt == _open_type)
         {
-            File_Loaded_Status load_status = UNLOADED;
+            _open_queue.append(names_list);
+            _open_total += names_list.count();
+        }
+        else
+        {
+            logW << "Ignoring open request: a batch of a different model type is still loading\n";
+        }
+        return;
+    }
 
-            if (mt == MODEL_TYPE::MAPS_H5)
+    if (_model == nullptr || names_list.count() == 0)
+    {
+        return;
+    }
+
+    setFileTabActionsEnabled(false);
+
+    _open_queue = names_list;
+    _open_type = mt;
+    _open_total = names_list.count();
+    _open_done = 0;
+
+    _startNextOpen();
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_startNextOpen()
+{
+    if (_open_queue.isEmpty() || _model == nullptr)
+    {
+        _finishOpenBatch();
+        return;
+    }
+
+    _open_current = _open_queue.takeFirst();
+    const QString name = _open_current;
+    // Captured by value: the pool thread must not read _model, which setModel() can
+    // change while the job runs.
+    MapsWorkspaceModel* model = _model;
+
+    if (_open_type == MODEL_TYPE::MAPS_H5)
+    {
+        _open_h5_future = Global_Thread_Pool::inst()->enqueue([model, name] { return model->get_MapsH5_Model(name); });
+        _open_poll_timer.start();
+        return;
+    }
+
+    if (_open_type == MODEL_TYPE::RAW)
+    {
+        if (false == _open_cursor_set)
+        {
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            _open_cursor_set = true;
+        }
+
+        if (name.endsWith(".h5") || name.endsWith(".hdf5") || name.endsWith(".emd"))
+        {
+            _open_raw_future = Global_Thread_Pool::inst()->enqueue([model, name] { return model->get_RAW_Model(name); });
+            _open_poll_timer.start();
+            return;
+        }
+
+        if (name.endsWith(".mda") || name.contains(".mca"))
+        {
+            // loading through background thread on windows seems to lock up on fopen
+            _completeOpenRaw(model->get_RAW_Model(name));
+        }
+        else
+        {
+            _completeOpenRaw(nullptr);
+        }
+        return;
+    }
+
+    // MODEL_TYPE::VLM. Also loaded on the GUI thread; the thread pool variant this
+    // replaced was already commented out before any of this.
+    File_Loaded_Status load_status = FAILED_LOADING;
+    VLM_Model* vlm_model = model->get_VLM_Model(name);
+    if (vlm_model != nullptr)
+    {
+        load_status = LOADED;
+        vlm_model->getImage();
+    }
+
+    // loaded_model() can reach a slot that closes the workspace and deletes this.
+    QPointer<MapsWorkspaceFilesWidget> alive(this);
+    emit loaded_model(name, MODEL_TYPE::VLM);
+    if (alive.isNull())
+    {
+        return;
+    }
+    _vlm_tab_widget->loaded_file_status_changed(load_status, name);
+    _advanceOpenBatch();
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_pollOpenJob()
+{
+    if (_open_h5_future.valid())
+    {
+        if (_open_h5_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        {
+            return;
+        }
+        _open_poll_timer.stop();
+        std::shared_ptr<MapsH5Model> h5_model;
+        try
+        {
+            // get() rethrows whatever the job threw. Letting that out of a timer slot
+            // would unwind into the event loop and terminate.
+            h5_model = _open_h5_future.get();
+        }
+        catch (...)
+        {
+            logE << "Failed loading " << _open_current.toStdString() << "\n";
+        }
+        _completeOpenH5(h5_model);
+        return;
+    }
+
+    if (_open_raw_future.valid())
+    {
+        if (_open_raw_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        {
+            return;
+        }
+        _open_poll_timer.stop();
+        RAW_Model* raw_model = nullptr;
+        try
+        {
+            raw_model = _open_raw_future.get();
+        }
+        catch (...)
+        {
+            logE << "Failed loading " << _open_current.toStdString() << "\n";
+        }
+        _completeOpenRaw(raw_model);
+        return;
+    }
+
+    // Nothing in flight; the timer should not be running.
+    _open_poll_timer.stop();
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_completeOpenH5(std::shared_ptr<MapsH5Model> h5_model)
+{
+    const QString name = _open_current;
+    File_Loaded_Status load_status = FAILED_LOADING;
+    QPointer<MapsWorkspaceFilesWidget> alive(this);
+
+    if (h5_model != nullptr && _model != nullptr)
+    {
+        // have to call from main thread because ifstream.open locks up in threadpool
+        //_model->load_v9_rois(name, h5_model);
+
+        int idx = -1;
+        for (int b = 0; b < MAX_DETECTORS; b++)
+        {
+            QString bs = QString::number(b);
+            if (name.endsWith(bs))
             {
-                std::future< std::shared_ptr<MapsH5Model>> ret = Global_Thread_Pool::inst()->enqueue([this, name] { return _model->get_MapsH5_Model(name); });
-                std::future_status status;
-                do
-                {
-                    status = ret.wait_for(std::chrono::milliseconds(100));
-                    QCoreApplication::processEvents();
-                } while (status != std::future_status::ready);
-
-                std::shared_ptr<MapsH5Model> h5Model = ret.get();
-                if (h5Model != nullptr)
-                {
-                    // have to call from main thread because ifstream.open locks up in threadpool
-                    //_model->load_v9_rois(name, h5Model);
-
-                    int idx = -1;
-                    for (int b = 0; b <MAX_DETECTORS; b++)
-                    {
-                        QString bs = QString::number(b);
-                        if (name.endsWith(bs))
-                        {
-                            idx = b;
-                            break;
-                        }
-                    }
-                    // Share ownership with MapsWorkspaceModel rather than
-                    // aliasing its storage with a no-op deleter. The alias did
-                    // not take a reference, so re-running load_fit_params()
-                    // (Save Fit Parameters does) reassigned the dict entry,
-                    // freed the override, and left every loaded model reading
-                    // and writing the freed maps.
-                    std::shared_ptr<data_struct::Params_Override<double>> param_override_ptr = _model->getParamOverridePtr(idx);
-                    //if we can't find override for specific detector, try to use the avg one.
-                    if (param_override_ptr == nullptr)
-                    {
-                        param_override_ptr = _model->getParamOverridePtr(-1);
-                    }
-                    if (param_override_ptr == nullptr)
-                    {
-                        // generate param file; MapsH5Model becomes sole owner
-                        param_override_ptr = std::make_shared<data_struct::Params_Override<double>>();
-                    }
-                    h5Model->set_fit_parameters_override(param_override_ptr);
-                    emit loaded_model(name, mt);
-                    load_status = LOADED;
-                }
-                else
-                {
-                    load_status = FAILED_LOADING;
-                }
-                _h5_tab_widget->loaded_file_status_changed(load_status, name);
+                idx = b;
+                break;
             }
-            else if (mt == MODEL_TYPE::RAW)
-            {
-				RAW_Model* model = nullptr;
-                
-                QApplication::setOverrideCursor(Qt::WaitCursor);
-                
-				if (name.endsWith(".mda") || name.contains(".mca"))
-				{
-					QCoreApplication::processEvents();
-					// loading through background thread on windows seems to lock up on fopen
-					model = _model->get_RAW_Model(name);
-				}
-				if (name.endsWith(".h5") || name.endsWith(".hdf5") || name.endsWith(".emd"))
-				{
-					QCoreApplication::processEvents();
-					std::future< RAW_Model*> ret = Global_Thread_Pool::inst()->enqueue([this, name] { return _model->get_RAW_Model(name); });
-                    std::future_status status;
-                    do
-                    {
-                        status = ret.wait_for(std::chrono::milliseconds(100));
-                        QCoreApplication::processEvents();
-                    } while (status != std::future_status::ready);
-
-					model = ret.get();
-				}
-                QApplication::restoreOverrideCursor();
-                /*
-                
-                QCoreApplication::processEvents();
-                std::future< RAW_Model*> ret = Global_Thread_Pool::inst()->enqueue([this, name] { return _model->get_RAW_Model(name); });
-                while (ret._Is_ready() == false)
-                {
-                    QCoreApplication::processEvents();
-                }
-
-                model = ret.get();
-                */
-                if (model != nullptr)
-                {
-                    emit loaded_model(name, mt);
-                    load_status = LOADED;
-                }
-                else
-                {
-                    load_status = FAILED_LOADING;
-                }
-                _mda_tab_widget->loaded_file_status_changed(load_status, name);
-            }
-            else if (mt == MODEL_TYPE::VLM)
-            {
-                VLM_Model* Model = _model->get_VLM_Model(name);
-                
-                if (Model != nullptr)
-                {
-                    load_status = LOADED;
-                    Model->getImage();
-                }
-                else
-                {
-                    load_status = FAILED_LOADING;
-                }
-                emit loaded_model(name, mt);
-                QCoreApplication::processEvents();
-                /*
-                std::future< VLM_Model*> ret = Global_Thread_Pool::inst()->enqueue([this, name] { return _model->get_VLM_Model(name); });
-                std::future_status status;
-                int cntr = 0;
-                do
-                {
-                    status = ret.wait_for(std::chrono::milliseconds(100));
-                    QCoreApplication::processEvents();
-                    cntr++;
-                    if (cntr > 1200)
-                    {
-                        load_status = FAILED_LOADING;
-                        break;
-                    }
-                } while (status != std::future_status::ready);
-                if (load_status == UNLOADED)
-                {
-                    VLM_Model* Model = ret.get();
-                    if (Model != nullptr)
-                    {
-                        load_status = LOADED;
-                        Model->getImage();
-                        emit loaded_model(name, mt);
-                    }
-                    else
-                    {
-                        load_status = FAILED_LOADING;
-                    }
-                }*/
-                _vlm_tab_widget->loaded_file_status_changed(load_status, name);
-            }
-
-            cur++;
-            emit loaded_perc(cur, amt);
-            QCoreApplication::processEvents();
+        }
+        // Share ownership with MapsWorkspaceModel rather than aliasing its storage
+        // with a no-op deleter. The alias did not take a reference, so re-running
+        // load_fit_params() (Save Fit Parameters does) reassigned the dict entry,
+        // freed the override, and left every loaded model reading and writing the
+        // freed maps.
+        std::shared_ptr<data_struct::Params_Override<double>> param_override_ptr = _model->getParamOverridePtr(idx);
+        //if we can't find override for specific detector, try to use the avg one.
+        if (param_override_ptr == nullptr)
+        {
+            param_override_ptr = _model->getParamOverridePtr(-1);
+        }
+        if (param_override_ptr == nullptr)
+        {
+            // generate param file; MapsH5Model becomes sole owner
+            param_override_ptr = std::make_shared<data_struct::Params_Override<double>>();
+        }
+        h5_model->set_fit_parameters_override(param_override_ptr);
+        load_status = LOADED;
+        emit loaded_model(name, MODEL_TYPE::MAPS_H5);
+        if (alive.isNull())
+        {
+            return;
         }
     }
-    setFileTabActionsEnabled(true);
+
+    _h5_tab_widget->loaded_file_status_changed(load_status, name);
+    _advanceOpenBatch();
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_completeOpenRaw(RAW_Model* raw_model)
+{
+    const QString name = _open_current;
+    File_Loaded_Status load_status = FAILED_LOADING;
+    QPointer<MapsWorkspaceFilesWidget> alive(this);
+
+    if (raw_model != nullptr)
+    {
+        load_status = LOADED;
+        emit loaded_model(name, MODEL_TYPE::RAW);
+        if (alive.isNull())
+        {
+            return;
+        }
+    }
+
+    _mda_tab_widget->loaded_file_status_changed(load_status, name);
+    _advanceOpenBatch();
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_advanceOpenBatch()
+{
+    _open_done++;
+
+    QPointer<MapsWorkspaceFilesWidget> alive(this);
+    emit loaded_perc(_open_done, _open_total);
+    if (alive.isNull())
+    {
+        return;
+    }
+
+    if (_open_queue.isEmpty())
+    {
+        _finishOpenBatch();
+        return;
+    }
+
+    // Single shot rather than calling straight through: it keeps the stack flat over
+    // a long file list and gives the event loop a turn between files without
+    // anything in here pumping it.
+    QTimer::singleShot(0, this, &MapsWorkspaceFilesWidget::_startNextOpen);
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_finishOpenBatch()
+{
+    _open_poll_timer.stop();
+    _open_queue.clear();
+    _open_current.clear();
+
+    const bool was_running = (_open_total > 0);
+    _open_total = 0;
+    _open_done = 0;
+
+    if (_open_cursor_set)
+    {
+        QApplication::restoreOverrideCursor();
+        _open_cursor_set = false;
+    }
+
+    if (was_running)
+    {
+        setFileTabActionsEnabled(true);
+    }
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceFilesWidget::_waitForOpenJob()
+{
+    _open_poll_timer.stop();
+
+    // Deliberately a blocking wait with no processEvents(): the job is running
+    // through the MapsWorkspaceModel, and pumping here is exactly what let that
+    // model be destroyed underneath it.
+    if (_open_h5_future.valid())
+    {
+        try
+        {
+            static_cast<void>(_open_h5_future.get());
+        }
+        catch (...)
+        {
+            logE << "Failed loading " << _open_current.toStdString() << "\n";
+        }
+    }
+    if (_open_raw_future.valid())
+    {
+        try
+        {
+            static_cast<void>(_open_raw_future.get());
+        }
+        catch (...)
+        {
+            logE << "Failed loading " << _open_current.toStdString() << "\n";
+        }
+    }
 }
 
 //---------------------------------------------------------------------------
