@@ -618,9 +618,57 @@ void FitSpectraWidget::on_export_fit_paramters()
 
 //---------------------------------------------------------------------------
 
+// save_fit_and_int_spectra_labeled() loops energy->size() times and indexes every other
+// array it is handed without checking that they agree in length, so anything shorter than
+// _ev is read off the end of its buffer. Two members are routinely shorter: _fit_spec is
+// 2048 until a fit has run, and _spectra_background is 10 until a snip background has been
+// computed, while _ev is sized from the dataset's channel count. Hand the writer a padded
+// copy instead of the member whenever it is too short.
+// _labeled_spectras is exposed the same way and is never cleared, so it also goes stale:
+// fit a 2048 channel dataset, switch to a 4096 channel one and export without re-fitting,
+// and the detailed lines are read 2048 elements past their end.
+static ArrayDr* padded_to(ArrayDr& src, Eigen::Index n, ArrayDr& scratch)
+{
+    if (src.size() >= n)
+    {
+        return &src;
+    }
+    scratch.setZero(n);
+    scratch.head(src.size()) = src;
+    return &scratch;
+}
+
 void FitSpectraWidget::on_export_csv()
 {
-    emit export_csv_and_png(_spectra_widget->getPngofChart(), &_ev, _int_spec, &_spectra_background, &_fit_spec, &_labeled_spectras);
+    // The receivers consume these pointers synchronously inside the emit (both connections
+    // are direct), so the scratch arrays below outlive every use.
+    const Eigen::Index n = _ev.size();
+    ArrayDr back_scratch;
+    ArrayDr fit_scratch;
+    ArrayDr* back = padded_to(_spectra_background, n, back_scratch);
+    ArrayDr* fit = padded_to(_fit_spec, n, fit_scratch);
+
+    std::unordered_map<std::string, ArrayDr> labeled_scratch;
+    std::unordered_map<std::string, ArrayDr>* labeled = &_labeled_spectras;
+    for (const auto& itr : _labeled_spectras)
+    {
+        if (itr.second.size() < n)
+        {
+            labeled = &labeled_scratch;
+            break;
+        }
+    }
+    if (labeled == &labeled_scratch)
+    {
+        for (const auto& itr : _labeled_spectras)
+        {
+            ArrayDr& dst = labeled_scratch[itr.first];
+            dst.setZero(n);
+            dst.head(std::min<Eigen::Index>(itr.second.size(), n)) = itr.second.head(std::min<Eigen::Index>(itr.second.size(), n));
+        }
+    }
+
+    emit export_csv_and_png(_spectra_widget->getPngofChart(), &_ev, _int_spec, back, fit, labeled);
 }
 
 //---------------------------------------------------------------------------
