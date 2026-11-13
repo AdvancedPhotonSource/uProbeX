@@ -257,6 +257,14 @@ bool NelderMeadSolver::run()
    int numres = 0;
    int ifault = 0;
 
+   // Must be cleared, not just overwritten. TotalErrorFunction iterates this map rather
+   // than the vars array, so any key left behind from an earlier, larger run is still
+   // visited and still carries its old index - which now points past the end of the
+   // m_nvars element buffers nelmin passes in. The solver instance is created once and
+   // reused for every run (SolverProfileWidget.cpp:591-608) and m_dict_min_coef holds
+   // only the checked coefficients, so un-checking a few and running again was enough.
+   m_varIndexMap.clear();
+
    int i = 0;
    for (const QString &key : m_dict_min_coef.keys())
    {
