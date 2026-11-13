@@ -161,10 +161,12 @@ bool uProbeX::checkSameFileWindow(QString& filePath)
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        // qobject_cast, not static_cast + typeid: con->widget() is not always an
+        // AbstractImageWidget (an MDA_Widget is a plain QWidget), so the downcast was
+        // UB and typeid read a vptr off a wrongly-typed object.
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            VLM_Widget* widget = static_cast<VLM_Widget*>(w);
             if(widget->getModelFileName()  == filePath)
             {
                 QMessageBox::critical(nullptr, "SWS Window",
@@ -1047,11 +1049,15 @@ void uProbeX::saveScreenShot()
 
         if(m_subWindows.contains(id))
         {
-            gstar::AbstractImageWidget* imageWidget = dynamic_cast<gstar::AbstractImageWidget*>(w->widget());
+            // The dynamic_cast returns null for a non-image subwindow (an MDA_Widget is
+            // a plain QWidget), and typeid on a null pointer throws std::bad_typeid out
+            // of this QAction slot -> std::terminate. Save Screen Shot is always enabled
+            // (every setEnabled call for it is commented out), so an MDA window plus this
+            // menu item killed the application.
+            VLM_Widget* widget = qobject_cast<VLM_Widget*>(w->widget());
 
-            if(typeid(*imageWidget) == typeid(VLM_Widget))
+            if(widget != nullptr)
             {
-                VLM_Widget* widget = dynamic_cast<VLM_Widget*>(imageWidget);
                 widget->saveScreenShot();
             }
             else
@@ -1073,41 +1079,31 @@ void uProbeX::saveActivatedXML()
     {
         SubWindow* w = dynamic_cast<SubWindow*>(m_mdiArea->activeSubWindow());
         if (w == nullptr) return;
-        gstar::AbstractImageWidget* imageWidget = dynamic_cast<gstar::AbstractImageWidget*>(w->widget());
-        VLM_Widget* widget = nullptr;
-        if (imageWidget != nullptr)
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(w->widget());
+        if (widget == nullptr)
         {
-            if (typeid(*imageWidget) == typeid(VLM_Widget))
-            {
-                widget = dynamic_cast<VLM_Widget*>(imageWidget);
-            }
-            else
-            {
-                return;
-            }
-            if (widget != nullptr)
-            {
-                if (saveActivatedXmlRequired()) {
-                    QUuid id = w->getUuid();
+            return;
+        }
+        if (saveActivatedXmlRequired())
+        {
+            QUuid id = w->getUuid();
 
-                    if (m_subWindows.contains(id))
-                    {
-                        QMessageBox msgBox;
-                        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-                        msgBox.setDefaultButton(QMessageBox::No);
-                        msgBox.setIcon(QMessageBox::Question);
-                        msgBox.setText("Do you want to save the activated VLM workspace?");
-                        int ret = msgBox.exec();
+            if (m_subWindows.contains(id))
+            {
+                QMessageBox msgBox;
+                msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+                msgBox.setDefaultButton(QMessageBox::No);
+                msgBox.setIcon(QMessageBox::Question);
+                msgBox.setText("Do you want to save the activated VLM workspace?");
+                int ret = msgBox.exec();
 
-                        if (ret == QMessageBox::Yes)
-                        {
-                            widget->saveXMLCoordinateInfo();
-                        }
-                    }
+                if (ret == QMessageBox::Yes)
+                {
+                    widget->saveXMLCoordinateInfo();
                 }
-                widget->cleanUpTemoraryXMLFiles();
             }
         }
+        widget->cleanUpTemoraryXMLFiles();
     }
 
 }
@@ -1148,10 +1144,9 @@ void uProbeX::saveAllXML(bool verifyWithUser)
 
         for(SubWindow* con : m_subWindows.values())
         {
-            gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-            if(typeid(*w) == typeid(VLM_Widget))
+            widget = qobject_cast<VLM_Widget*>(con->widget());
+            if(widget != nullptr)
             {
-                widget = static_cast<VLM_Widget*>(w);
                 widget->saveXMLCoordinateInfo();
             }
         }
@@ -1167,10 +1162,9 @@ return false;
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             bool saveRequired = widget->verifySaveIsRequired();
             if (saveRequired)
             {
@@ -1189,10 +1183,9 @@ bool uProbeX::saveActivatedXmlRequired()
     return false;
     SubWindow* w = dynamic_cast<SubWindow*>(m_mdiArea->activeSubWindow());
     if (w != nullptr) {
-        gstar::AbstractImageWidget* imageWidget = dynamic_cast<gstar::AbstractImageWidget*>(w->widget());
-        if(typeid(*imageWidget) == typeid(VLM_Widget))
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(w->widget());
+        if(widget != nullptr)
         {
-            VLM_Widget* widget = dynamic_cast<VLM_Widget*>(imageWidget);
             return widget->verifySaveIsRequired();
         }
     }
@@ -1294,10 +1287,12 @@ void uProbeX::performAutoSave()
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = dynamic_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        // This one was a live crash, not just UB: the dynamic_cast yields null for an
+        // MDA_Widget subwindow and typeid(*w) then threw std::bad_typeid out of the
+        // auto-save timer slot. Having an MDA window open with auto-save on was enough.
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             widget->saveTemporaryXMLCoordinateInfo();
         }
     }
@@ -1310,14 +1305,10 @@ void uProbeX::cleanUpAutoSafeData() {
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = dynamic_cast<gstar::AbstractImageWidget*>(con->widget());
-        if (w != nullptr)
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if (widget != nullptr)
         {
-            if (typeid(*w) == typeid(VLM_Widget))
-            {
-                widget = static_cast<VLM_Widget*>(w);
-                widget->cleanUpTemoraryXMLFiles();
-            }
+            widget->cleanUpTemoraryXMLFiles();
         }
     }
 }
@@ -1354,10 +1345,10 @@ void uProbeX::showPreferences()
     QList<gstar::AbstractImageWidget*> widgetList;
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widgetList.append(w);
+            widgetList.append(widget);
         }
     }
 
@@ -1425,10 +1416,9 @@ void uProbeX::updatePreference()
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             widget->preferenceChanged();
         }
     }
@@ -1444,10 +1434,9 @@ void uProbeX::updateContextMenus()
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             widget->updateContextMenus();
         }
     }
