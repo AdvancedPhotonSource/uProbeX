@@ -5,6 +5,7 @@
 
 #include <mvc/MapsWorkspaceModel.h>
 #include <QEventLoop>
+#include <QPointer>
 #include "core/GlobalThreadPool.h"
 #include <QRegularExpression>
 #include "io/file/hdf5_io.h"
@@ -137,12 +138,19 @@ MapsWorkspaceModel::MapsWorkspaceModel() : QObject()
     _all_roi_suffex.append("r0i");
 
     _all_region_links_suffex.append("tif");
+
+    _load_poll_timer.setInterval(100);
+    connect(&_load_poll_timer, &QTimer::timeout, this, &MapsWorkspaceModel::_poll_load_jobs);
 }
 
 //---------------------------------------------------------------------------
 
 MapsWorkspaceModel::~MapsWorkspaceModel()
 {
+    // The pool jobs write into members of this object, so they have to be finished
+    // before any of it is torn down.
+    _wait_for_load_jobs();
+
 	_h5_models.clear();
 	_raw_models.clear();
 	_vlm_models.clear();
@@ -150,8 +158,20 @@ MapsWorkspaceModel::~MapsWorkspaceModel()
 
 //---------------------------------------------------------------------------
 
+// This used to block until every directory scan had finished, spinning on
+// QCoreApplication::processEvents() to keep the window painting. That pumped the
+// whole event queue from inside load(): closing the workspace there runs
+// ImageStackControlWidget's close (WA_DeleteOnClose), which emits controllerClosed
+// and makes uProbeX::mapsControllerClosed delete the MapsWorkspaceController - and
+// with it this model, whose load() was still on the stack. No null check can fix
+// that, so load() no longer waits at all. It hands the scans to the pool, returns,
+// and a timer collects the results from the real event loop.
 void MapsWorkspaceModel::load(QString filepath)
 {
+    // A previous load may still be in flight; its jobs write into the members this
+    // call is about to reuse.
+    _wait_for_load_jobs();
+
     try
     {
         std::vector<std::regex> ignore_dir_list = { std::regex("img.dat.*"), std::regex("mda.*"), std::regex("output.*"), std::regex("rois"), std::regex("flyXRF"), std::regex("XRF"), std::regex("[vV][lL][mM]") };
@@ -163,94 +183,50 @@ void MapsWorkspaceModel::load(QString filepath)
             return;
         }
 
+        // get list of directories in the root
+        std::string dataset_dir = filepath.toStdString();
+
+        // Jobs 0, 1 and 6 used to emplace into _raw_fileinfo_list from several threads
+        // at once. std::map insertion is not thread safe and they rebalance the same
+        // tree, and on top of that get_raw_file_list() handed the GUI a reference to
+        // that map while they were running. Each job now fills its own map and
+        // _poll_load_jobs() merges the result in when the job reports done, so
+        // _raw_fileinfo_list is only ever touched on the GUI thread.
+        _raw_scan_fileinfo_scratch.clear();
+        _mda_fileinfo_scratch.clear();
+        _esrf_fileinfo_scratch.clear();
+
+        // if check for esrf
+        if (Preferences::inst()->getValue(STR_SEARCH_SUB_DIR_FOR_DATASETS).toBool())
         {
-            std::map<int, std::future<bool>> job_queue;
-            // get list of directories in the root
-            std::string dataset_dir = filepath.toStdString();
-
-            // if check for esrf
-            if (Preferences::inst()->getValue(STR_SEARCH_SUB_DIR_FOR_DATASETS).toBool())
-            {
-                std::vector<std::string> root_dir_list = io::file::File_Scan::inst()->find_all_dirs(dataset_dir + DIR_END_CHAR, ignore_dir_list, false);
-                for (const auto& itr : root_dir_list)
+            // find_all_dirs() reads no File_Scan state, but inst() is not thread safe,
+            // so the singleton is resolved here on the GUI thread.
+            io::file::File_Scan* file_scan = io::file::File_Scan::inst();
+            QDir dir = *_dir;
+            QList<QString> raw_suffex = _raw_suffex;
+            std::map<QString, QFileInfo>* scratch = &_esrf_fileinfo_scratch;
+            _load_job_queue[6] = Global_Thread_Pool::inst()->enqueue(
+                [file_scan, dataset_dir, ignore_dir_list, dir, raw_suffex, scratch]() mutable -> bool
                 {
-                    get_filesnames_in_directory(*_dir, QString(itr.c_str()), _raw_suffex, &_raw_fileinfo_list, check_raw_h5, true);
-                    QCoreApplication::processEvents();
-                }
-            }
-            // Jobs 0 and 1 used to emplace into _raw_fileinfo_list from two pool threads at
-            // once. std::map insertion is not thread safe and the two rebalance the same
-            // tree, and on top of that get_raw_file_list() handed the GUI a reference to
-            // that map while both were running. Each job now fills its own map and this
-            // thread merges the result in when the job reports done, so _raw_fileinfo_list
-            // is only ever touched here.
-            _raw_scan_fileinfo_scratch.clear();
-            _mda_fileinfo_scratch.clear();
-            job_queue[0] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, ".", _raw_suffex, &_raw_scan_fileinfo_scratch, check_raw_h5, false);
-            job_queue[1] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "mda", _mda_suffex, &_mda_fileinfo_scratch, check_raw_mda, false);
-            job_queue[2] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "vlm", _vlm_suffex, &_vlm_fileinfo_list, check_vlm, false);
-            job_queue[3] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "img.dat", _all_h5_suffex, &_h5_fileinfo_list, check_imgdat_h5, false);
-            job_queue[4] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "rois", _all_roi_suffex, &_roi_fileinfo_list, check_roi, false);
-            job_queue[5] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "VLM/region_links", _all_region_links_suffex, &_region_links_fileinfo_list, check_region_link, false);
-
-            _is_fit_params_loaded = load_fit_params();
-            
-
-            while (job_queue.size() > 0)
-            {
-                QCoreApplication::processEvents();
-                std::vector<int> to_delete;
-                for (auto& itr : job_queue)
-                {
-                    std::future_status status = itr.second.wait_for(std::chrono::milliseconds(100));
-
-                    if (status == std::future_status::ready)
+                    std::vector<std::string> root_dir_list = file_scan->find_all_dirs(dataset_dir + DIR_END_CHAR, ignore_dir_list, false);
+                    for (const auto& itr : root_dir_list)
                     {
-                        switch (itr.first)
-                        {
-                        case 0:
-                            _is_raw_loaded = itr.second.get();
-                            // The job is finished, so this merge and every reader of
-                            // _raw_fileinfo_list are now on the same thread.
-                            _raw_fileinfo_list.insert(_raw_scan_fileinfo_scratch.begin(), _raw_scan_fileinfo_scratch.end());
-                            to_delete.push_back(itr.first);
-                            emit doneLoadingRAW();
-                            break;
-                        case 1:
-                            _is_raw_loaded = itr.second.get();
-                            _raw_fileinfo_list.insert(_mda_fileinfo_scratch.begin(), _mda_fileinfo_scratch.end());
-                            to_delete.push_back(itr.first);
-                            emit doneLoadingMDA();
-                            break;
-                        case 2:
-                            _is_vlm_loaded = itr.second.get();
-                            to_delete.push_back(itr.first);
-                            emit doneLoadingVLM();
-                            break;
-                        case 3:
-                            _is_imgdat_loaded = itr.second.get();
-                            to_delete.push_back(itr.first);
-                            emit doneLoadingImgDat();
-                            break;
-                        case 4:
-                            _is_rois_loaded = itr.second.get();
-                            to_delete.push_back(itr.first);
-                            break;
-                        default:
-                            to_delete.push_back(itr.first);
-                            break;
-                        }
+                        get_filesnames_in_directory(dir, QString(itr.c_str()), raw_suffex, scratch, check_raw_h5, true);
                     }
-                }
-                for (const auto& itr : to_delete)
-                {
-                    job_queue.erase(itr);
-                }   
-            }
-            // wait for all datasets to finish loading and then update roi's
-            _roi_files_to_num();
-            emit doneLoadingROIS();
+                    return true;
+                });
         }
+
+        _load_job_queue[0] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, ".", _raw_suffex, &_raw_scan_fileinfo_scratch, check_raw_h5, false);
+        _load_job_queue[1] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "mda", _mda_suffex, &_mda_fileinfo_scratch, check_raw_mda, false);
+        _load_job_queue[2] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "vlm", _vlm_suffex, &_vlm_fileinfo_list, check_vlm, false);
+        _load_job_queue[3] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "img.dat", _all_h5_suffex, &_h5_fileinfo_list, check_imgdat_h5, false);
+        _load_job_queue[4] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "rois", _all_roi_suffex, &_roi_fileinfo_list, check_roi, false);
+        _load_job_queue[5] = Global_Thread_Pool::inst()->enqueue(get_filesnames_in_directory, *_dir, "VLM/region_links", _all_region_links_suffex, &_region_links_fileinfo_list, check_region_link, false);
+
+        _is_fit_params_loaded = load_fit_params();
+
+        _load_poll_timer.start();
     }
     catch (std::string& s)
     {
@@ -261,14 +237,160 @@ void MapsWorkspaceModel::load(QString filepath)
         throw std::string("Failed to open Maps Analyzed dataset!");
     }
 
-    emit doneLoading();
-
 }
 
 //---------------------------------------------------------------------------
 
+void MapsWorkspaceModel::_poll_load_jobs()
+{
+    std::vector<int> finished;
+    for (auto& itr : _load_job_queue)
+    {
+        // Zero timeout: this runs on the GUI thread from a timer, so it must not
+        // block. Jobs that are not ready are picked up on a later tick.
+        if (itr.second.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        {
+            continue;
+        }
+
+        finished.push_back(itr.first);
+
+        // future::get() rethrows whatever the job threw, and this is a timer slot:
+        // anything escaping here unwinds into the event loop and calls
+        // std::terminate. The old code made the same get() calls, but from inside
+        // load(), which had a catch-all around it.
+        bool job_result = false;
+        try
+        {
+            job_result = itr.second.get();
+        }
+        catch (...)
+        {
+            logE << "Directory scan job " << itr.first << " failed\n";
+        }
+
+        // Only bookkeeping here. The signals go out below, once every map this tick
+        // touches is consistent and the finished jobs are off the queue.
+        switch (itr.first)
+        {
+        case 0:
+            _is_raw_loaded = job_result;
+            // The job is finished, so this merge and every reader of
+            // _raw_fileinfo_list are now on the same thread.
+            _raw_fileinfo_list.insert(_raw_scan_fileinfo_scratch.begin(), _raw_scan_fileinfo_scratch.end());
+            break;
+        case 1:
+            _is_raw_loaded = job_result;
+            _raw_fileinfo_list.insert(_mda_fileinfo_scratch.begin(), _mda_fileinfo_scratch.end());
+            break;
+        case 2:
+            _is_vlm_loaded = job_result;
+            break;
+        case 3:
+            _is_imgdat_loaded = job_result;
+            break;
+        case 4:
+            _is_rois_loaded = job_result;
+            break;
+        case 6:
+            _raw_fileinfo_list.insert(_esrf_fileinfo_scratch.begin(), _esrf_fileinfo_scratch.end());
+            break;
+        default:
+            break;
+        }
+    }
+
+    for (const auto& itr : finished)
+    {
+        _load_job_queue.erase(itr);
+    }
+
+    const bool all_done = (_load_job_queue.size() == 0);
+    if (all_done)
+    {
+        // Every dataset has finished loading, so the roi's can be updated.
+        _load_poll_timer.stop();
+        _roi_files_to_num();
+    }
+
+    // A slot on any of these can tear the workspace down, which deletes this model.
+    // The queue is already drained above, so the destructor's wait is a no-op and
+    // the only thing left to get wrong is touching "this" afterwards.
+    QPointer<MapsWorkspaceModel> alive(this);
+    for (const auto& itr : finished)
+    {
+        switch (itr)
+        {
+        case 0:
+        case 6:
+            emit doneLoadingRAW();
+            break;
+        case 1:
+            emit doneLoadingMDA();
+            break;
+        case 2:
+            emit doneLoadingVLM();
+            break;
+        case 3:
+            emit doneLoadingImgDat();
+            break;
+        default:
+            break;
+        }
+        if (alive.isNull())
+        {
+            return;
+        }
+    }
+
+    if (all_done)
+    {
+        emit doneLoadingROIS();
+        if (alive.isNull())
+        {
+            return;
+        }
+        emit doneLoading();
+    }
+}
+
+//---------------------------------------------------------------------------
+
+void MapsWorkspaceModel::_wait_for_load_jobs()
+{
+    _load_poll_timer.stop();
+    if (_load_job_queue.size() == 0)
+    {
+        return;
+    }
+
+    // Blocking, and deliberately without processEvents(): the point of this call is
+    // that no event may be delivered while the jobs still hold pointers into this
+    // object. It is only reached when a load is restarted or the model is destroyed
+    // mid-scan.
+    for (auto& itr : _load_job_queue)
+    {
+        try
+        {
+            static_cast<void>(itr.second.get());
+        }
+        catch (...)
+        {
+            // A job that threw cannot stop us from waiting for the rest.
+        }
+    }
+    _load_job_queue.clear();
+}
+
+//---------------------------------------------------------------------------
+
+// Each of these rescans a list that a load() job may still be filling, so they all
+// have to let the initial load finish first. Refresh is a button, so it can be
+// pressed while the workspace is still loading.
+
 void MapsWorkspaceModel::reload_raw()
 {
+    _wait_for_load_jobs();
     _is_raw_loaded = get_filesnames_in_directory(*_dir, "mda", _mda_suffex, &_raw_fileinfo_list, check_raw_mda, false);
     emit doneLoadingRAW();
 }
@@ -277,6 +399,7 @@ void MapsWorkspaceModel::reload_raw()
 
 void MapsWorkspaceModel::reload_analyzed()
 {
+    _wait_for_load_jobs();
     _is_imgdat_loaded = get_filesnames_in_directory(*_dir, "img.dat", _all_h5_suffex, &_h5_fileinfo_list, check_imgdat_h5, false);
     emit doneLoadingImgDat();
 }
@@ -285,6 +408,7 @@ void MapsWorkspaceModel::reload_analyzed()
 
 void MapsWorkspaceModel::reload_vlm()
 {
+    _wait_for_load_jobs();
     _is_vlm_loaded = get_filesnames_in_directory(*_dir, "vlm", _vlm_suffex, &_vlm_fileinfo_list, check_vlm, false);
     emit doneLoadingVLM();
 }
@@ -293,6 +417,7 @@ void MapsWorkspaceModel::reload_vlm()
 
 void MapsWorkspaceModel::reload_roi()
 {
+    _wait_for_load_jobs();
     _roi_fileinfo_list.clear();
     get_filesnames_in_directory(*_dir, "rois", _all_roi_suffex, &_roi_fileinfo_list, check_roi, false);
 }
@@ -301,6 +426,7 @@ void MapsWorkspaceModel::reload_roi()
 
 void MapsWorkspaceModel::reload_region_link()
 {
+    _wait_for_load_jobs();
     _region_links_fileinfo_list.clear();
     get_filesnames_in_directory(*_dir, "VLM/region_links", _all_region_links_suffex, &_region_links_fileinfo_list, check_region_link, false);
 }
@@ -309,6 +435,8 @@ void MapsWorkspaceModel::reload_region_link()
 
 void MapsWorkspaceModel::unload()
 {
+    // The in flight scans write into the maps cleared below.
+    _wait_for_load_jobs();
 
     _h5_models.clear();
     _raw_models.clear();
@@ -318,6 +446,7 @@ void MapsWorkspaceModel::unload()
     _raw_fileinfo_list.clear();
     _raw_scan_fileinfo_scratch.clear();
     _mda_fileinfo_scratch.clear();
+    _esrf_fileinfo_scratch.clear();
     _vlm_fileinfo_list.clear();
     _h5_fileinfo_list.clear();
     _roi_fileinfo_list.clear();
