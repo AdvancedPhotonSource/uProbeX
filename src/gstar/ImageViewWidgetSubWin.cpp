@@ -528,6 +528,13 @@ void ImageViewWidgetSubWin::resizeEvent(QResizeEvent* event)
 
 void ImageViewWidgetSubWin::connectRoiGraphicsItemToMouseEvents(RoiMaskGraphicsItem* roi)
 {
+    // _sub_windows is empty between clear() and resize() in newGridLayout(), and
+    // operator[] on an empty vector is undefined. Guarded the same way as the
+    // _sub_windows[0] access in restoreLabels() above.
+    if (_sub_windows.empty())
+    {
+        return;
+    }
     connect(_sub_windows[0].scene, &ImageViewScene::onMousePressEvent, roi, &RoiMaskGraphicsItem::onMousePressEvent);
     connect(_sub_windows[0].scene, &ImageViewScene::onMouseMoveEvent, roi, &RoiMaskGraphicsItem::onMouseMoveEvent);
     connect(_sub_windows[0].scene, &ImageViewScene::onMouseReleaseEvent, roi, &RoiMaskGraphicsItem::onMouseReleaseEvent);
@@ -537,6 +544,10 @@ void ImageViewWidgetSubWin::connectRoiGraphicsItemToMouseEvents(RoiMaskGraphicsI
 
 void ImageViewWidgetSubWin::disconnectRoiGraphicsItemToMouseEvents(RoiMaskGraphicsItem* roi)
 {
+    if (_sub_windows.empty())
+    {
+        return;
+    }
     disconnect(_sub_windows[0].scene, &ImageViewScene::onMousePressEvent, roi, &RoiMaskGraphicsItem::onMousePressEvent);
     disconnect(_sub_windows[0].scene, &ImageViewScene::onMouseMoveEvent, roi, &RoiMaskGraphicsItem::onMouseMoveEvent);
     disconnect(_sub_windows[0].scene, &ImageViewScene::onMouseReleaseEvent, roi, &RoiMaskGraphicsItem::onMouseReleaseEvent);
