@@ -647,17 +647,22 @@ void uProbeX::make_VLM_Window(QString path, bool newWindow)
     if (newWindow == false) 
         return;
 
-    VLM_Model* model = nullptr;
+    // Owned here until the widget takes it. Nothing else ever owned this model:
+    // VLM_Widget only borrows what setModel() is given, and the models it is
+    // normally handed belong to a MapsWorkspaceModel. So the success path below
+    // leaked one model per VLM file opened, and the catch freed the widget but
+    // not the model.
+    std::unique_ptr<VLM_Model> model;
     QFileInfo fileinfo(path);
 
     QString ext = fileinfo.suffix().toLower();
     if (ext == "tif" || ext == "tiff")
     {
-        model = new TIFF_Model();
+        model = std::make_unique<TIFF_Model>();
     }
     else if (ext == "sws")
     {
-        model = new SWSModel();
+        model = std::make_unique<SWSModel>();
     }
 
     if (model != nullptr)
@@ -672,11 +677,10 @@ void uProbeX::make_VLM_Window(QString path, bool newWindow)
             model->load(path);
             if (model->loaded())
             {
-                widget->setModel(model);
+                widget->setOwnedModel(std::move(model));
             }
             else
             {
-                delete model;
                 delete widget;
                 return;
             }

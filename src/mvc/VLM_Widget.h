@@ -157,7 +157,15 @@ public:
     */
    bool verifySaveIsRequired();
 
+   // Borrowed: the caller keeps ownership and must outlive this widget. That is
+   // the usual case - ImageStackControlWidget hands over models that
+   // MapsWorkspaceModel owns through unique_ptr.
    void setModel(VLM_Model* model);
+
+   // Takes ownership, for a model created purely to back this one widget. Kept
+   // separate from setModel() so the borrowed call sites cannot accidentally hand
+   // over something they still own.
+   void setOwnedModel(std::unique_ptr<VLM_Model> model);
 
    /**
     * @brief widgetChanged
@@ -494,6 +502,11 @@ private:
    // microprobe context menu handlers was testing indeterminate stack
    // garbage, which passes the guard and then dereferences.
    VLM_Model* _model = nullptr;
+
+   // Non-null only when this widget owns what _model points at, via
+   // setOwnedModel(). Destroyed after the destructor body, so _model stays valid
+   // for everything ~VLM_Widget() does.
+   std::unique_ptr<VLM_Model> _owned_model;
 
    /**
     * @brief m_addCalibrationAction

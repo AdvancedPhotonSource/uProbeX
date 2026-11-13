@@ -1872,6 +1872,14 @@ void VLM_Widget::setModel(VLM_Model* model)
 
 //---------------------------------------------------------------------------
 
+void VLM_Widget::setOwnedModel(std::unique_ptr<VLM_Model> model)
+{
+    setModel(model.get());
+    _owned_model = std::move(model);
+}
+
+//---------------------------------------------------------------------------
+
 void VLM_Widget::preferenceChanged()
 {
 
