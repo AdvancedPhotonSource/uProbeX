@@ -616,11 +616,15 @@ void ImageViewScene::sceneSelectionChanged()
         }
     }
 
+    // Qt::UniqueConnection because the disconnects at the top of this function are inside
+    // "if (m_model != nullptr && m_selectionModel != nullptr)" while these reconnects are
+    // not. On a scene with a null model - CoLocalizationWidget.cpp:380 makes one - each
+    // pass added another copy of both connections and doubled the invocation count.
     if (m_selectionModel != nullptr)
     {
-        connect(m_selectionModel, &QItemSelectionModel::selectionChanged, this, &ImageViewScene::modelSelectionChanged);
+        connect(m_selectionModel, &QItemSelectionModel::selectionChanged, this, &ImageViewScene::modelSelectionChanged, Qt::UniqueConnection);
     }
-    connect(this, &ImageViewScene::selectionChanged, this, &ImageViewScene::sceneSelectionChanged);
+    connect(this, &ImageViewScene::selectionChanged, this, &ImageViewScene::sceneSelectionChanged, Qt::UniqueConnection);
 
 }
 
