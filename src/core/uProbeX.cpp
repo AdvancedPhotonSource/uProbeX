@@ -249,14 +249,13 @@ void uProbeX::createMenuBar()
 
     connect(_menu_file, &QMenu::aboutToShow, this, &uProbeX::menuBarEnable);
 
-    // TODO: finish view options
+    // View menu
     _menu_view = std::make_unique<QMenu>("View");
-    _menu_view_file_top = _menu_view->addMenu("File Nav Top");
-    _menu_view_file_side = _menu_view->addMenu("File Nav Side");
-    _menu_view_marker = _menu_view->addMenu("Annotation : ROI");
-    //action = _menu_file->addAction("File Navigate");
-    //connect(action, &QAction::triggered, this, &uProbeX::exitApplication);
-    //m_menu->addMenu(_menu_view);
+    _action_roi_dialog = _menu_view->addAction("ROI Dialog");
+    connect(_action_roi_dialog, &QAction::triggered, this, &uProbeX::openRoiDialog);
+    connect(_menu_view.get(), &QMenu::aboutToShow, this, &uProbeX::updateRoiDialogActionEnabled);
+    m_menu->addMenu(_menu_view.get());
+    updateRoiDialogActionEnabled();
 
     // Batch menu
     _menu_batch = new QMenu("Batch Processing");
@@ -299,6 +298,108 @@ void uProbeX::setBatchActionsEnabled(bool val)
    _action_gen_scan_vlm->setEnabled(val);
    */
   _menu_batch->setEnabled(val);
+}
+
+//---------------------------------------------------------------------------
+
+void uProbeX::updateRoiDialogActionEnabled()
+{
+    if (_action_roi_dialog == nullptr)
+    {
+        return;
+    }
+
+    bool enabled = false == _mapsWorkspaceControllers.isEmpty();
+    if (false == enabled)
+    {
+        for (SubWindow* window : m_subWindows)
+        {
+            if (window != nullptr && qobject_cast<MapsElementsWidget*>(window->widget()) != nullptr)
+            {
+                enabled = true;
+                break;
+            }
+        }
+    }
+
+    _action_roi_dialog->setEnabled(enabled);
+}
+
+//---------------------------------------------------------------------------
+
+void uProbeX::openRoiDialog()
+{
+    MapsWorkspaceController* controller = nullptr;
+    if (_focused_workspace != nullptr && _mapsWorkspaceControllers.contains(_focused_workspace))
+    {
+        controller = _focused_workspace;
+    }
+    if (controller != nullptr)
+    {
+        if (controller->openRoiDialog())
+        {
+            return;
+        }
+
+        QMessageBox::information(this, "ROI Dialog",
+            "Open or select an analyzed dataset in the workspace first.");
+        return;
+    }
+
+    if (m_mdiArea != nullptr && m_mdiArea->activeSubWindow() != nullptr)
+    {
+        MapsElementsWidget* dataset = qobject_cast<MapsElementsWidget*>(m_mdiArea->activeSubWindow()->widget());
+        if (dataset != nullptr && dataset->getModel() != nullptr)
+        {
+            dataset->openRoiDialog();
+            return;
+        }
+    }
+
+    if (_mapsWorkspaceControllers.size() == 1)
+    {
+        controller = _mapsWorkspaceControllers.first();
+        if (controller != nullptr && controller->openRoiDialog())
+        {
+            return;
+        }
+
+        QMessageBox::information(this, "ROI Dialog",
+            "Open or select an analyzed dataset in the workspace first.");
+        return;
+    }
+
+    // If there is exactly one analyzed dataset window, use it even when another
+    // MDI window is currently active. More than one would be ambiguous.
+    MapsElementsWidget* only_dataset = nullptr;
+    SubWindow* only_window = nullptr;
+    for (SubWindow* window : m_subWindows)
+    {
+        MapsElementsWidget* dataset = window != nullptr
+            ? qobject_cast<MapsElementsWidget*>(window->widget()) : nullptr;
+        if (dataset == nullptr || dataset->getModel() == nullptr)
+        {
+            continue;
+        }
+        if (only_dataset != nullptr)
+        {
+            only_dataset = nullptr;
+            only_window = nullptr;
+            break;
+        }
+        only_dataset = dataset;
+        only_window = window;
+    }
+
+    if (only_dataset != nullptr)
+    {
+        m_mdiArea->setActiveSubWindow(only_window);
+        only_dataset->openRoiDialog();
+        return;
+    }
+
+    QMessageBox::information(this, "ROI Dialog",
+        "Activate an analyzed dataset, then try again.");
 }
 
 //---------------------------------------------------------------------------
@@ -526,6 +627,7 @@ void uProbeX::initialize()
     m_mdiArea = nullptr;
     _focused_workspace = nullptr;
     _batch_export_workspace = nullptr;
+    _action_roi_dialog = nullptr;
 
     // Each workspace is its own top level window, so this is the only way to know which one the
     // user means when they reach up to the main window's Batch menu.
@@ -537,8 +639,6 @@ void uProbeX::initialize()
 
 void uProbeX::onFocusChanged(QWidget* old, QWidget* now)
 {
-    Q_UNUSED(old);
-
     if (now == nullptr)
     {
         return;
@@ -552,6 +652,23 @@ void uProbeX::onFocusChanged(QWidget* old, QWidget* now)
             _focused_workspace = controller;
             return;
         }
+    }
+
+    // Clicking the main menu moves focus away from a workspace before its action
+    // fires. Preserve that workspace for the menu click, but clear a stale workspace
+    // once the user is actually working in a main-window dataset.
+    QWidget* old_win = old != nullptr ? old->window() : nullptr;
+    for (MapsWorkspaceController* controller : _mapsWorkspaceControllers)
+    {
+        if (controller != nullptr && controller->get_widget() == old_win && win == this)
+        {
+            _focused_workspace = controller;
+            return;
+        }
+    }
+    if (win == this)
+    {
+        _focused_workspace = nullptr;
     }
 }
 
@@ -824,6 +941,7 @@ void uProbeX::mapsControllerClosed(MapsWorkspaceController* controller)
     {
         setBatchActionsEnabled(false);
     }
+    updateRoiDialogActionEnabled();
 }
 
 //---------------------------------------------------------------------------
@@ -875,6 +993,8 @@ void uProbeX::make_HDF_Window(std::shared_ptr<MapsH5Model> model)
     m_subWindows[w->getUuid()] = w;
 
     connect(w, &SubWindow::windowStateChanged, widget, &MapsElementsWidget::windowChanged);
+
+    updateRoiDialogActionEnabled();
 
 
 }
@@ -1019,6 +1139,7 @@ void uProbeX::openMapsWorkspace(QString dirName)
 
     mapsWorkspaceController->setWorkingDir(dirName);
     setBatchActionsEnabled(true);
+    updateRoiDialogActionEnabled();
 
 }
 
@@ -1406,6 +1527,7 @@ void uProbeX::subWindowClosed(SubWindow* subWindow)
         return;
 
     m_subWindows.erase(i);
+    updateRoiDialogActionEnabled();
 
     // deleteLater(), not delete. We are called from SubWindow::closeEvent() by way
     // of windowClosing(), so a plain delete here frees the window while its own

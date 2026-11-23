@@ -41,6 +41,8 @@ public:
 
    // Top level window for this workspace. Null once the user has closed it.
    QWidget* get_widget(){ return _imgStackControllWidget;}
+
+   bool openRoiDialog();
    
 signals:
 

@@ -233,6 +233,8 @@ private slots:
 
    void BatcGenScanVlm();
 
+   void openRoiDialog();
+
 private:
 
    /**
@@ -288,6 +290,8 @@ private:
 
    void setBatchActionsEnabled(bool val);
 
+   void updateRoiDialogActionEnabled();
+
 private:
 
    /**
@@ -303,9 +307,8 @@ private:
    QMenu* _menu_batch;
 
    std::unique_ptr<QMenu> _menu_view;
-   QMenu* _menu_view_file_top;
-   QMenu* _menu_view_file_side;
-   QMenu* _menu_view_marker;
+
+   QAction* _action_roi_dialog;
 
    QMenu* _menu_help;
 

@@ -96,6 +96,9 @@ public slots:
 
    void openImageSegDialog();
 
+   /** Select the ROI tab and open the ROI image-segmentation dialog. */
+   void openRoiDialog();
+
    void convertRoiToMca();
 
    void openRoiStatsWidget();

@@ -49,6 +49,29 @@ void ImageStackControlWidget::savePref()
 
 //---------------------------------------------------------------------------
 
+bool ImageStackControlWidget::openRoiDialog()
+{
+	if (_imageGrid == nullptr || _image_name_cb == nullptr)
+	{
+		return false;
+	}
+
+	auto model = _h5_model_map.find(_image_name_cb->currentText());
+	if (model == _h5_model_map.end() || model->second == nullptr)
+	{
+		return false;
+	}
+
+	_imageGrid->setModel(model->second);
+	_mda_widget->hide();
+	_vlm_widget->hide();
+	_imageGrid->show();
+	_imageGrid->openRoiDialog();
+	return true;
+}
+
+//---------------------------------------------------------------------------
+
 void ImageStackControlWidget::createLayout()
 {
     QVBoxLayout* vlayout = new QVBoxLayout();

@@ -629,7 +629,7 @@ void MapsElementsWidget::_appendRoiTab()
 
     QVBoxLayout* roiVbox = new QVBoxLayout();
     _btn_roi_img_seg = new QPushButton("ROI Dialog");
-    connect(_btn_roi_img_seg, &QPushButton::released, this, &MapsElementsWidget::openImageSegDialog);
+    connect(_btn_roi_img_seg, &QPushButton::released, this, &MapsElementsWidget::openRoiDialog);
 
     _btn_roi_stats = new QPushButton("ROI Statistics");
     connect(_btn_roi_stats, &QPushButton::released, this, &MapsElementsWidget::openRoiStatsWidget);
@@ -817,6 +817,19 @@ void MapsElementsWidget::openImageSegDialog()
 
         _img_seg_diag.show();
     }
+}
+
+//---------------------------------------------------------------------------
+
+void MapsElementsWidget::openRoiDialog()
+{
+    if (_model == nullptr)
+    {
+        return;
+    }
+
+    m_tabWidget->setCurrentIndex(ROI_TAB);
+    openImageSegDialog();
 }
 
 //---------------------------------------------------------------------------

@@ -78,4 +78,11 @@ void MapsWorkspaceController::setWorkingDir(QString path)
 }
 //---------------------------------------------------------------------------
 
+bool MapsWorkspaceController::openRoiDialog()
+{
+	return _imgStackControllWidget != nullptr && _imgStackControllWidget->openRoiDialog();
+}
+
+//---------------------------------------------------------------------------
+
 //---------------------------------------------------------------------------
