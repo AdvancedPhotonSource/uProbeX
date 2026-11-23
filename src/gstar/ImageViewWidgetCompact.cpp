@@ -5,6 +5,7 @@
 
 #include "gstar/ImageViewWidgetCompact.h"
 #include <QPainterPath>
+#include <algorithm>
 
 using namespace gstar;
 
@@ -900,11 +901,6 @@ void ImageViewWidgetCompact::updateMinMaxLabels()
         QRectF pixmapBounds(0, 0, pixmap.width(), pixmap.height());
         visibleRectInPixmap = visibleRectInPixmap.intersected(pixmapBounds);
         
-        unsigned int start_row = qMax(0, (int)qFloor(visibleRectInPixmap.top()));
-        unsigned int end_row = qMin(pixmap.height() - 1, (int)qCeil(visibleRectInPixmap.bottom()));
-        unsigned int start_col = qMax(0, (int)qFloor(visibleRectInPixmap.left()));
-        unsigned int end_rcol = qMin(pixmap.width() - 1, (int)qCeil(visibleRectInPixmap.right()));
-        
 /*
         QPainterPath parentClipPath = _clip_pixmaps[0]->shape();
         QPainterPath mappedClipPath = _pixmaps[0]->mapFromItem(_clip_pixmaps[0], parentClipPath);
@@ -931,13 +927,42 @@ void ImageViewWidgetCompact::updateMinMaxLabels()
         {
             if(_raw_data_items.count(idx) > 0)
             {
-                float counts_max = std::numeric_limits<float>::min();
-                float counts_min = std::numeric_limits<float>::max();
-                for(unsigned int r = start_row; r < end_row; r++)
+                const ArrayXXr<float>& raw_data = _raw_data_items.at(idx);
+                if(raw_data.size() == 0)
                 {
-                    for(unsigned int c = start_col; c < end_rcol; c++)
+                    continue;
+                }
+
+                const int render_scale = renderScaleAt(static_cast<int>(idx));
+                const int start_row = std::clamp(
+                    static_cast<int>(qFloor(visibleRectInPixmap.top() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.rows()));
+                const int end_row = std::clamp(
+                    static_cast<int>(qCeil(visibleRectInPixmap.bottom() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.rows()));
+                const int start_col = std::clamp(
+                    static_cast<int>(qFloor(visibleRectInPixmap.left() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.cols()));
+                const int end_col = std::clamp(
+                    static_cast<int>(qCeil(visibleRectInPixmap.right() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.cols()));
+
+                if(start_row >= end_row || start_col >= end_col)
+                {
+                    continue;
+                }
+
+                float counts_max = std::numeric_limits<float>::lowest();
+                float counts_min = std::numeric_limits<float>::max();
+                for(int r = start_row; r < end_row; r++)
+                {
+                    for(int c = start_col; c < end_col; c++)
                     {
-                        float val =_raw_data_items[idx](r,c);
+                        float val = raw_data(r,c);
                         counts_max = std::max(val, counts_max);
                         counts_min = std::min(val, counts_min);
                     }
@@ -1168,7 +1193,7 @@ QString ImageViewWidgetCompact::getLabelAt(int idx)
 
 void ImageViewWidgetCompact::setCountsTrasnformAt(unsigned int idx, const ArrayXXr<float>& normalized)
 {
-    if(idx < _min_textitems.size())
+    if(idx < _min_textitems.size() && normalized.size() > 0)
     {
         _raw_data_items[idx] = ArrayXXr<float>(normalized);
         QString minStr = "min: "+ QString::number(normalized.minCoeff());
@@ -1259,7 +1284,10 @@ bool ImageViewWidgetCompact::getMinMaxAt(int grid_idx, float &counts_min, float 
 
 void ImageViewWidgetCompact::updateMinMax(unsigned int idx, const ArrayXXr<float>& normalized)
 {
-    _sub_window.on_update_min_max(normalized.minCoeff(), normalized.maxCoeff(), 0.0, 1.0, false);
+    if(normalized.size() > 0)
+    {
+        _sub_window.on_update_min_max(normalized.minCoeff(), normalized.maxCoeff(), 0.0, 1.0, false);
+    }
 }
 
 //---------------------------------------------------------------------------

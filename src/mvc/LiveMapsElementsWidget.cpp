@@ -133,7 +133,7 @@ void LiveMapsElementsWidget::createLayout()
 
     _vlm_widget = new VLM_Widget(_scan_dialog.get());
     _vlm_widget->setAvailScans(&_avail_scans);
-    gstar::CoordinateModel *coord_model = new gstar::CoordinateModel(&_linear_trans);
+    gstar::CoordinateModel *coord_model = new gstar::CoordinateModel(&_linear_trans, false);
     _vlm_widget->setCoordinateModel(coord_model);
     _vlm_widget->load_live_coord_settings();
     _vlm_widget->setEnableChangeBackground(true);

@@ -846,7 +846,7 @@ void ImageViewWidgetSubWin::setCountsTrasnformAt(unsigned int idx, const ArrayXX
 
 void ImageViewWidgetSubWin::updateMinMax(unsigned int idx, const ArrayXXr<float>& normalized)
 {
-    if(idx < _sub_windows.size())
+    if(idx < _sub_windows.size() && normalized.size() > 0)
     {
         _sub_windows[idx].on_update_min_max(normalized.minCoeff(), normalized.maxCoeff(), 0.0, 1.0, false);
     }

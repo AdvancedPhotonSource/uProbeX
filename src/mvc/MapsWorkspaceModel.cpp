@@ -7,6 +7,7 @@
 #include <QEventLoop>
 #include <QPointer>
 #include "core/GlobalThreadPool.h"
+#include "core/Hdf5Mutex.h"
 #include <QRegularExpression>
 #include "io/file/hdf5_io.h"
 #include "preferences/Preferences.h"
@@ -32,6 +33,7 @@ bool check_raw_mda(QFileInfo fileInfo)
 
 bool check_raw_h5(QFileInfo fileInfo)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
 
     hid_t fid = H5Fopen(fileInfo.filePath().toStdString().c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
     if (fid < 0)
@@ -48,6 +50,7 @@ bool check_raw_h5(QFileInfo fileInfo)
         }
     }
 
+    H5Fclose(fid);
     return false;
 
 }
@@ -84,6 +87,7 @@ bool check_vlm(QFileInfo fileInfo)
 
 bool check_imgdat_h5(QFileInfo fileInfo)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
 
     hid_t fid = H5Fopen(fileInfo.filePath().toStdString().c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
     if (fid < 0)
@@ -97,6 +101,7 @@ bool check_imgdat_h5(QFileInfo fileInfo)
         return true;
     }
 
+    H5Fclose(fid);
     return false;
 
 }
@@ -536,6 +541,7 @@ std::shared_ptr<MapsH5Model> MapsWorkspaceModel::get_MapsH5_Model(QString name)
 
 RAW_Model* MapsWorkspaceModel::get_RAW_Model(QString name)
 {
+	hdf5::Lock hdf5_lock(hdf5::mutex());
 	
     if(_raw_models.count(name) > 0)
     {

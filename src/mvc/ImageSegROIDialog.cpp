@@ -11,6 +11,7 @@
 #include <QIcon>
 #include <QGridLayout>
 #include "preferences/Preferences.h"
+#include "core/Hdf5Mutex.h"
 #include "core/str_defines.h"
 #include "mvc/SpectraWidgetSettingsDialog.h"
 
@@ -698,6 +699,7 @@ void ImageSegRoiDialog::onPlot()
 			itr->to_roi_vec(pixel_list);
 			data_struct::Spectra<double> int_spectra;
 			std::unordered_map<std::string, double> scaler_sum_map;
+			hdf5::Lock hdf5_lock(hdf5::mutex());
 			if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, &int_spectra, scaler_sum_map))
 			{
 				if(ev.size() == 0)
@@ -888,6 +890,43 @@ void ImageSegRoiDialog::setColorMap(QVector<QRgb>* selected_colormap)
 
 bool ImageSegRoiDialog::_get_img(ArrayXXr<float> &int_img, bool normalize)
 {
+	Eigen::Index expected_rows = 0;
+	Eigen::Index expected_cols = 0;
+	bool found_image = false;
+
+	// Eigen's coefficient-wise addition requires identical dimensions, and its
+	// min/max reductions are invalid for empty arrays. Validate all selected inputs
+	// before touching the output so selection changes cannot terminate the process.
+	for (int i = 0; i < _img_list_model->rowCount(); i++)
+	{
+		QStandardItem* item0 = _img_list_model->item(i);
+		if (item0->checkState() == Qt::Checked && _img_data.count(item0->text()) > 0)
+		{
+			const ArrayXXr<float>& selected_img = _img_data.at(item0->text());
+			if (selected_img.rows() == 0 || selected_img.cols() == 0)
+			{
+				logW << "Cannot segment empty image " << item0->text().toStdString() << "\n";
+				return false;
+			}
+			if (false == found_image)
+			{
+				expected_rows = selected_img.rows();
+				expected_cols = selected_img.cols();
+				found_image = true;
+			}
+			else if (selected_img.rows() != expected_rows || selected_img.cols() != expected_cols)
+			{
+				logW << "Cannot combine segmentation images with different dimensions\n";
+				return false;
+			}
+		}
+	}
+
+	if (false == found_image)
+	{
+		return false;
+	}
+
 	bool first = true;
 
 	if (normalize)
@@ -915,7 +954,14 @@ bool ImageSegRoiDialog::_get_img(ArrayXXr<float> &int_img, bool normalize)
 				float localLow = norm_img.minCoeff();
 				float localDiff = norm_img.maxCoeff() - localLow;
 
-				norm_img = norm_img.unaryExpr([localLow, localDiff, highCoef](float v) { return ((v - localLow)/ (localDiff) ) * highCoef; });
+				if (localDiff > 0.f)
+				{
+					norm_img = norm_img.unaryExpr([localLow, localDiff, highCoef](float v) { return ((v - localLow) / localDiff) * highCoef; });
+				}
+				else
+				{
+					norm_img.setZero();
+				}
 
 				if (first)
 				{

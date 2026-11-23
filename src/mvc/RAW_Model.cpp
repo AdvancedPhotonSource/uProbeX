@@ -5,6 +5,7 @@
 
 #include <mvc/RAW_Model.h>
 #include "core/defines.h"
+#include "core/Hdf5Mutex.h"
 #include <QFileInfo>
 #include "io/file/hl_file_io.h"
 #include "io/file/mca_io.h"
@@ -88,6 +89,8 @@ bool RAW_Model::load(QString filename)
 		}
 		else if (filename.endsWith(".h5") || filename.endsWith(".hdf5") || filename.endsWith(".emd") )
 		{
+			hdf5::Lock hdf5_lock(hdf5::mutex());
+
 			if (_path.isEmpty())
 			{
 				_path = finfo.path();

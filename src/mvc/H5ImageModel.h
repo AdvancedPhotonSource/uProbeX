@@ -55,10 +55,10 @@ private:
     QString _filepath;
 
     std::vector<unsigned char> _data;
-    hsize_t _data_dims_in[3];
+    hsize_t _data_dims_in[3] = {0, 0, 0};
     //data_struct::ArrayXXr<int> _image_data;
-    float _x_axis;
-    float _y_axis;
+    float _x_axis = 0.0f;
+    float _y_axis = 0.0f;
 
 };
 

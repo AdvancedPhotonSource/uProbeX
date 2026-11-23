@@ -410,8 +410,14 @@ void UProbeRegionGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
 
 void UProbeRegionGraphicsItem::zoomToRegion()
 {
+   QGraphicsScene* itemScene = scene();
+   if(itemScene == nullptr || itemScene->views().isEmpty())
+   {
+      return;
+   }
+
    // Estimated minimum text size. Should be predicted.
-   QGraphicsView* v = scene()->views().first();
+   QGraphicsView* v = itemScene->views().first();
    QSize size = v->size();
 
    double rectWidth = m_rect.width();
@@ -430,7 +436,11 @@ void UProbeRegionGraphicsItem::zoomToRegion()
    m_font.setPixelSize(predictedPixelSize);
    m_lastStringWidth = 0;
 
-   ImageViewScene* imageViewScene = ((ImageViewScene*) scene());
+   ImageViewScene* imageViewScene = qobject_cast<ImageViewScene*>(itemScene);
+   if(imageViewScene == nullptr)
+   {
+      return;
+   }
    imageViewScene->updateZoom(this);
 }
 
@@ -961,4 +971,4 @@ QString UProbeRegionGraphicsItem::getValueAsString(QString prop)
 
 //---------------------------------------------------------------------------
 
-               
+

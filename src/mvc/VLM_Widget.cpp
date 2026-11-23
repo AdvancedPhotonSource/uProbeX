@@ -2493,9 +2493,17 @@ void VLM_Widget::loadLiveBackground(QString fileName)
                H5ImageModel h5image_model;
                if(_live_h5model->load(fileName))
                {
+	                  const std::vector<std::string> analyzed_types = _live_h5model->getAnalyzedTypes();
+	                  if (analyzed_types.empty())
+	                  {
+	                     logE << "HDF5 file contains no supported analyzed-count groups: "
+	                          << fileName.toStdString() << "\n";
+	                     _live_h5model.reset();
+	                     return;
+	                  }
                   ArrayXXr<float> normalized;
                   GenerateImageProp props;
-                  props.analysis_type = _live_h5model->getAnalyzedTypes().front();
+	                  props.analysis_type = analyzed_types.front();
                   props.element = STR_TOTAL_FLUORESCENCE_YIELD;
                   props.selected_colormap = ColorMap::inst()->get_color_map(Preferences::inst()->getValue(STR_COLORMAP).toString());
 
@@ -2567,9 +2575,19 @@ void VLM_Widget::loadLiveBackground(QString fileName)
 
 void VLM_Widget::onElementSelect(QString value, int viewIdx)
 {
+	Q_UNUSED(viewIdx);
+	if (_live_h5model == nullptr)
+	{
+	   return;
+	}
+	const std::vector<std::string> analyzed_types = _live_h5model->getAnalyzedTypes();
+	if (analyzed_types.empty())
+	{
+	   return;
+	}
    ArrayXXr<float> normalized;
    GenerateImageProp props;
-   props.analysis_type = _live_h5model->getAnalyzedTypes().front();
+	props.analysis_type = analyzed_types.front();
    props.element = value.toStdString();
    props.selected_colormap = ColorMap::inst()->get_color_map(Preferences::inst()->getValue(STR_COLORMAP).toString());
 

@@ -116,6 +116,11 @@ void ImageViewWidget::setCoordsVisible(bool val)
 
 QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& colormap, GenerateImageProp &props)
 {
+    if(int_img.size() == 0)
+    {
+        return QImage();
+    }
+
     float counts_max = int_img.maxCoeff();
     float counts_min = int_img.minCoeff();
     if(props.contrast_limits == STR_FULL_IMAGE)
@@ -176,6 +181,14 @@ QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& co
                 counts_min = std::min(val, counts_min);
             }
         }
+
+        // Very small images can produce a zero-sized center region. Keep the
+        // full-image limits in that case instead of using the numeric sentinels.
+        if(counts_max < counts_min)
+        {
+            counts_max = int_img.maxCoeff();
+            counts_min = int_img.minCoeff();
+        }
     }
 
     int width = static_cast<unsigned int>(int_img.cols());
@@ -184,6 +197,7 @@ QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& co
     image.setColorTable(colormap);
 
     float max_min = counts_max - counts_min;
+    const bool flat = !(max_min > 0.0f);
     for (int row = 0; row < height; row++)
     {
         for (int col = 0; col < width; col++)
@@ -193,7 +207,11 @@ QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& co
             cnts = std::min(counts_max, cnts);
             cnts = std::max(counts_min, cnts);
             //convert to pixel
-            unsigned char data = static_cast<unsigned char>(((cnts - counts_min) / max_min) * 255.0);
+            unsigned char data = 0;
+            if(false == flat)
+            {
+                data = static_cast<unsigned char>(((cnts - counts_min) / max_min) * 255.0f);
+            }
             image.setPixel(col, row, (uint)data);
         }
     }

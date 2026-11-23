@@ -12,6 +12,7 @@
 #include <QFontMetrics>
 #include <tiffio.h>
 #include "core/str_defines.h"
+#include "core/Hdf5Mutex.h"
 
 
 const Eigen::Index Counter1 = 0;
@@ -413,6 +414,8 @@ void MapsH5Model::loadAllRoiMaps()
 
 void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+
     bool resave = false;
     QFile roiFile(roi_file_name);
     if (!roiFile.open(QIODevice::ReadOnly))
@@ -634,6 +637,10 @@ void MapsH5Model::getIntegratedSpectra(data_struct::Spectra<double>& out_spectra
 
 bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<float> &x_arr, data_struct::ArrayXXr<float> &y_arr)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+    x_arr.resize(0, 0);
+    y_arr.resize(0, 0);
+
     std::string x_axis_loc_9 = "/MAPS/x_axis";
     std::string x_axis_loc_10 = "/MAPS/Scan/x_axis";
     std::string y_axis_loc_9 = "/MAPS/y_axis";
@@ -673,6 +680,7 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<f
         }
     }
 
+    bool loaded = false;
     if (x_id > -1 && y_id > -1)
     {
         hid_t x_space_id = H5Dget_space(x_id);
@@ -680,51 +688,46 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<f
         
         hsize_t x_dims_in[2] = { 0,0 };
         hsize_t y_dims_in[2] = { 0,0 };
-        int dims = H5Sget_simple_extent_ndims(x_space_id);
-        int xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
-        int ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
+        int x_dims = x_space_id >= 0 ? H5Sget_simple_extent_ndims(x_space_id) : -1;
+        int y_dims = y_space_id >= 0 ? H5Sget_simple_extent_ndims(y_space_id) : -1;
+        int xstatus_n = -1;
+        int ystatus_n = -1;
+        if ((x_dims == 1 || x_dims == 2) && (y_dims == 1 || y_dims == 2))
+        {
+            xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
+            ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
+        }
         if (xstatus_n > -1 && ystatus_n > -1)
         {
-            if(dims == 1)
+            if(x_dims == 1 && y_dims == 1)
             {
                 x_arr.resize(1, x_dims_in[0]);
                 y_arr.resize(y_dims_in[0],1);
             }
-            else if(dims == 2)
+            else if(x_dims == 2 && y_dims == 2)
             {
                 x_arr.resize(x_dims_in[0], x_dims_in[1]);
                 y_arr.resize(y_dims_in[0], y_dims_in[1]);
             }
             else
             {
-                logE<<"Can not load dims size "<<dims<<"\n";
-                if (x_space_id > -1)
-                {
-                    H5Sclose(x_space_id);
-                }
-                if (y_space_id > -1)
-                {
-                    H5Sclose(y_space_id);
-                }
-                if (x_id > -1)
-                {
-                    H5Dclose(x_id);
-                }
-                if(y_id > -1)
-                {
-                    H5Dclose(y_id);
-                }
-                return false;
+                logE<<"Mismatched x/y axis ranks "<<x_dims<<" and "<<y_dims<<"\n";
             }
-            hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, x_arr.data());
-            if (error > 0)
+            if (x_arr.size() > 0 && y_arr.size() > 0)
             {
-                logW << "Could not load x_axis\n";
-            }
-            error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, y_arr.data());
-            if (error > 0)
-            {
-                logW << "Could not load y_axis\n";
+                const herr_t x_error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id,
+                                                x_space_id, H5P_DEFAULT, x_arr.data());
+                const herr_t y_error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id,
+                                                y_space_id, H5P_DEFAULT, y_arr.data());
+                loaded = x_error >= 0 && y_error >= 0;
+                if (x_error < 0)
+                {
+                    logW << "Could not load x_axis\n";
+                }
+                if (y_error < 0)
+                {
+                    logW << "Could not load y_axis\n";
+                }
             }
         }
 
@@ -743,13 +746,20 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<f
     }
 
     H5Fclose(file_id);
-    return true;
+    if (false == loaded)
+    {
+        x_arr.resize(0, 0);
+        y_arr.resize(0, 0);
+    }
+    return loaded;
 }
 
 //---------------------------------------------------------------------------
 
 bool MapsH5Model::load(QString filepath)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+
     H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
     std::chrono::time_point<std::chrono::system_clock> start, end;
     start = std::chrono::system_clock::now();
@@ -785,6 +795,7 @@ bool MapsH5Model::load(QString filepath)
         else
         {
             _version = 10.0;
+            H5Gclose(analyzed_grp_id);
         }
 
         
@@ -804,63 +815,36 @@ bool MapsH5Model::load(QString filepath)
         {
             H5Fflush(file_id, H5F_SCOPE_LOCAL);
 
-            ssize_t obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_DATASET | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
+            auto close_open_objects = [file_id](unsigned int object_type, auto close_object, const char* object_name)
             {
-                logI << "closing forgotten datasets: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_DATASET, -1, objs) > -1)
+                const unsigned int local_type = object_type | H5F_OBJ_LOCAL;
+                const ssize_t object_count = H5Fget_obj_count(file_id, local_type);
+                if (object_count <= 0)
                 {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Dclose(objs[i]);
-                    }
+                    return;
                 }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_GROUP | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
-            {
-                logI << "closing forgotten groups: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_GROUP, -1, objs) > -1)
+
+                logI << "closing forgotten " << object_name << ": " << object_count << "\n";
+                std::vector<hid_t> objects(static_cast<size_t>(object_count));
+                const ssize_t returned_count = H5Fget_obj_ids(file_id, local_type,
+                                                               objects.size(), objects.data());
+                if (returned_count <= 0)
                 {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Gclose(objs[i]);
-                    }
+                    return;
                 }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_DATATYPE | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
-            {
-                logI << "closing forgotten datatypes: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_DATATYPE, -1, objs) > -1)
+
+                for (ssize_t i = 0; i < returned_count; ++i)
                 {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Tclose(objs[i]);
-                    }
+                    close_object(objects[static_cast<size_t>(i)]);
                 }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_ATTR | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
-            {
-                logI << "closing forgotten attributes: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_ATTR, -1, objs) > -1)
-                {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Aclose(objs[i]);
-                    }
-                }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_ALL | H5F_OBJ_LOCAL);
+            };
+
+            close_open_objects(H5F_OBJ_DATASET, H5Dclose, "datasets");
+            close_open_objects(H5F_OBJ_GROUP, H5Gclose, "groups");
+            close_open_objects(H5F_OBJ_DATATYPE, H5Tclose, "datatypes");
+            close_open_objects(H5F_OBJ_ATTR, H5Aclose, "attributes");
+
+            const ssize_t obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_ALL | H5F_OBJ_LOCAL);
             if (obj_cnt > 1) //file is still open
             {
                 logI << "**** did not close total objects " << obj_cnt << "\n";
@@ -2465,6 +2449,8 @@ bool MapsH5Model::get_copy_lhcp_rhcp_spectra(data_struct::Spectra<double>& out_l
 
 bool MapsH5Model::load_pixel_spectra(const std::pair<int, int>& point, ArrayDr& spectra)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+
     std::string mca_arr_path_10 = "/MAPS/Spectra/mca_arr";
     std::string mca_arr_path_9 = "/MAPS/mca_arr";
 
@@ -2549,14 +2535,16 @@ bool MapsH5Model::_load_counts_10(hid_t maps_grp_id)
         return false;
     }
 
+    bool loaded_any_counts = false;
     for( std::string group_name : analyzed_groups )
     {
-        _load_analyzed_counts_10(analyzed_grp_id, group_name);
+        loaded_any_counts = _load_analyzed_counts_10(analyzed_grp_id, group_name)
+            || loaded_any_counts;
     }
 
     H5Gclose(analyzed_grp_id);
 
-    return true;
+    return loaded_any_counts;
 }
 
 //---------------------------------------------------------------------------
@@ -3321,6 +3309,12 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
     bool draw = getCountsOrScaler(props.analysis_type, props.element, &normalized);
     int height = 0;
     int width = 0;
+
+    if (draw && normalized.size() == 0)
+    {
+        logW << "Cannot render an empty map for " << props.element << "\n";
+        return QImage();
+    }
 
     if (draw)
     {

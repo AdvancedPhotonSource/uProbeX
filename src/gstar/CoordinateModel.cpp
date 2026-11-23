@@ -10,18 +10,16 @@ using namespace gstar;
 
 //---------------------------------------------------------------------------
 
-CoordinateModel::CoordinateModel() : QObject(0)
+CoordinateModel::CoordinateModel() : QObject(0), m_transformer(nullptr), m_ownsTransformer(false)
 {
 
 }
 
 //---------------------------------------------------------------------------
 
-CoordinateModel::CoordinateModel(ITransformer *transformer) : QObject(0)
+CoordinateModel::CoordinateModel(ITransformer *transformer, bool takeOwnership)
+   : QObject(0), m_transformer(transformer), m_ownsTransformer(takeOwnership)
 {
-
-   m_transformer = transformer;
-
 }
 
 //---------------------------------------------------------------------------
@@ -29,11 +27,11 @@ CoordinateModel::CoordinateModel(ITransformer *transformer) : QObject(0)
 CoordinateModel::~CoordinateModel()
 {
 
-   if(m_transformer != nullptr)
+   if(m_transformer != nullptr && m_ownsTransformer)
    {
       delete m_transformer;
-      m_transformer = nullptr;
    }
+   m_transformer = nullptr;
 
 }
 
@@ -80,10 +78,11 @@ bool CoordinateModel::setTransformerVariable(QString name, double val)
 
 //---------------------------------------------------------------------------
 
-void CoordinateModel::setTransformer(ITransformer *transformer)
+void CoordinateModel::setTransformer(ITransformer *transformer, bool takeOwnership)
 {
 
    m_transformer = transformer;
+   m_ownsTransformer = takeOwnership;
 
 }
 
@@ -92,7 +91,10 @@ void CoordinateModel::setTransformer(ITransformer *transformer)
 void CoordinateModel::setTransformerPrecision(int number)
 {
 
-   m_transformer->setDecimalPrecision(number);
+   if(m_transformer != nullptr)
+   {
+      m_transformer->setDecimalPrecision(number);
+   }
 
 }
 

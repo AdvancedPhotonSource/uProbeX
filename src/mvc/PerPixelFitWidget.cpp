@@ -5,6 +5,7 @@
 
 #include <mvc/PerPixelFitWidget.h>
 #include <core/process_whole.h>
+#include <core/Hdf5Mutex.h>
 
 //---------------------------------------------------------------------------
 
@@ -46,7 +47,7 @@ void PerPixelFitWidget::createLayout()
 void PerPixelFitWidget::setDir(std::string directory)
 {
     _directory = directory;
-    if (_directory[directory.length() - 1] != DIR_END_CHAR)
+    if (false == _directory.empty() && _directory.back() != DIR_END_CHAR)
     {
         _directory += DIR_END_CHAR;
     }
@@ -62,6 +63,12 @@ void PerPixelFitWidget::setDir(std::string directory)
 // worker thread, nothing pumps events, and the destructor waits for the thread.
 void PerPixelFitWidget::runProcessing()
 {
+    if (_directory.empty())
+    {
+        logE << "Cannot run per-pixel fitting without a dataset directory\n";
+        return;
+    }
+
     if (_worker != nullptr)
     {
         // Already fitting. The Run button is disabled while a fit is in flight, but
@@ -88,6 +95,7 @@ void PerPixelFitWidget::runProcessing()
     {
         try
         {
+            hdf5::Lock hdf5_lock(hdf5::mutex());
             if (io::file::init_analysis_job_detectors(analysis_job))
             {
                 io::file::File_Scan::inst()->populate_netcdf_hdf5_files(directory);

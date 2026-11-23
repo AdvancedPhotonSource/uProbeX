@@ -19,6 +19,7 @@
 #include <gstar/CountsLookupTransformer.h>
 #include <limits>
 #include "core/GlobalThreadPool.h"
+#include "core/Hdf5Mutex.h"
 #include "io/file/csv_io.h"
 #include "core/ColorMap.h"
 #include "io/file/mca_io.h"
@@ -485,7 +486,7 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     restoreGeometry(Preferences::inst()->getValue(STR_MAPS_WIDGET_GEOMETRY).toByteArray());
     //restoreState(Preferences::inst()->getValue(STR_MAPS_WIDGET_WINDOWSTATE).toByteArray());
 
-    setCoordinateModel(new gstar::CoordinateModel(&_motor_trans));
+    setCoordinateModel(new gstar::CoordinateModel(&_motor_trans, false));
 
     hbox->setSpacing(0);
 	hbox->setContentsMargins(0, 0, 0, 0);
@@ -2092,6 +2093,7 @@ void MapsElementsWidget::on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*
             itr->to_roi_vec(pixel_list);
             data_struct::Spectra<double> int_spectra;
             std::unordered_map<std::string, double> scaler_maps;
+            hdf5::Lock hdf5_lock(hdf5::mutex());
             if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, &int_spectra, scaler_maps))
             {
                 std::string roi_f_name = _model->getDatasetName().toStdString();

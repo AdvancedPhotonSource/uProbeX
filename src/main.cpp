@@ -9,10 +9,104 @@
 #include <QDateTime>
 #include <QString>
 #include <QFile>
+#include <QMetaObject>
 #include <QTextStream>
 #include "mvc/LiveMapsElementsWidget.h"
 
-static std::ostringstream strCout;
+#include <mutex>
+#include <streambuf>
+
+namespace
+{
+
+class ThreadSafeLogBuffer final : public std::streambuf
+{
+public:
+    std::string take()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        std::string output;
+        output.swap(_output);
+        return output;
+    }
+
+protected:
+    int_type overflow(int_type ch) override
+    {
+        if (traits_type::eq_int_type(ch, traits_type::eof()))
+        {
+            return traits_type::not_eof(ch);
+        }
+
+        std::lock_guard<std::mutex> lock(_mutex);
+        _output.push_back(traits_type::to_char_type(ch));
+        return ch;
+    }
+
+    std::streamsize xsputn(const char* text, std::streamsize count) override
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _output.append(text, static_cast<std::size_t>(count));
+        return count;
+    }
+
+private:
+    std::mutex _mutex;
+    std::string _output;
+};
+
+ThreadSafeLogBuffer& consoleLogBuffer()
+{
+    // Keep the buffer alive through static destruction. main() restores cout's
+    // original buffer before returning, but other static destructors may still log.
+    static ThreadSafeLogBuffer* buffer = new ThreadSafeLogBuffer();
+    return *buffer;
+}
+
+class ScopedCoutRedirect
+{
+public:
+    explicit ScopedCoutRedirect(std::streambuf* replacement)
+        : _original(std::cout.rdbuf(replacement))
+    {
+    }
+
+    ~ScopedCoutRedirect()
+    {
+        std::cout.rdbuf(_original);
+    }
+
+private:
+    std::streambuf* _original;
+};
+
+void appendLogHtmlOnGuiThread(QString html, bool ensureCursorVisible)
+{
+    QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr)
+    {
+        return;
+    }
+
+    QMetaObject::invokeMethod(application,
+        [html = std::move(html), ensureCursorVisible]()
+        {
+            QTextEdit* log = uProbeX::log_textedit;
+            if (log == nullptr)
+            {
+                return;
+            }
+
+            log->insertHtml(html);
+            if (ensureCursorVisible)
+            {
+                log->ensureCursorVisible();
+            }
+        },
+        Qt::QueuedConnection);
+}
+
+}
 
 /*---------------------------------------------------------------------------*/
 
@@ -21,58 +115,50 @@ void myMessageOutput(QtMsgType type, const QMessageLogContext &context, const QS
 
 	QString h_msg(msg);
 	QByteArray localMsg = msg.toLocal8Bit();
+	const char* contextFile = context.file != nullptr ? context.file : "unknown";
+	const char* contextFunction = context.function != nullptr ? context.function : "unknown";
 	int cnt = 0;	
 	if (type == QtInfoMsg || type == QtDebugMsg)
 	{
 		if (type == QtInfoMsg)
 		{
-			fprintf(stderr, "Info: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+			fprintf(stderr, "Info: %s (%s:%u, %s)\n", localMsg.constData(), contextFile, context.line, contextFunction);
 		}
 		else if(type == QtDebugMsg)
 		{
-			fprintf(stderr, "Debug: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+			fprintf(stderr, "Debug: %s (%s:%u, %s)\n", localMsg.constData(), contextFile, context.line, contextFunction);
 		}
-		if (uProbeX::log_textedit != nullptr)
+		cnt += h_msg.count("Info: ");
+		cnt += h_msg.count("Warning: ");
+		cnt += h_msg.count("Error: ");
+		h_msg.replace("Info: ", "<span style=\" font-weight: bold; \">Info: </span>");
+		h_msg.replace("\033[1;31mError: \033[0;m", "<span style=\"color : red; font-weight: bold; \">Error: </span>");
+		h_msg.replace("\033[1;33mWarning: \033[0;m", "<span style=\"color : yellow; font-weight: bold; \">Warning: </span>");
+		if (cnt > 0)
 		{
-			cnt += h_msg.count("Info: ");
-			cnt += h_msg.count("Warning: ");
-			cnt += h_msg.count("Error: ");
-			h_msg.replace("Info: ", "<span style=\" font-weight: bold; \">Info: </span>");
-			h_msg.replace("\033[1;31mError: \033[0;m", "<span style=\"color : red; font-weight: bold; \">Error: </span>");
-			h_msg.replace("\033[1;33mWarning: \033[0;m", "<span style=\"color : yellow; font-weight: bold; \">Warning: </span>");
-			if (cnt > 0)
-			{
-				h_msg.replace("\n", "<br>");
-			}
-			uProbeX::log_textedit->insertHtml(h_msg);
-			uProbeX::log_textedit->ensureCursorVisible();
+			h_msg.replace("\n", "<br>");
 		}
+		appendLogHtmlOnGuiThread(h_msg, true);
 	}
 	else if (type == QtWarningMsg)
 	{
-		fprintf(stderr, "Warning: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
-		if (uProbeX::log_textedit != nullptr)
-		{
-			h_msg = "<span style=\"color : yellow; \">" + msg + "</span><br />";
-			uProbeX::log_textedit->insertHtml(h_msg);
-		}
+		fprintf(stderr, "Warning: %s (%s:%u, %s)\n", localMsg.constData(), contextFile, context.line, contextFunction);
+		h_msg = "<span style=\"color : yellow; \">" + msg + "</span><br />";
+		appendLogHtmlOnGuiThread(h_msg, false);
 	}
 	else if (type == QtCriticalMsg)
 	{
-		fprintf(stderr, "Critical: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
-		if (uProbeX::log_textedit != nullptr)
-		{
-			h_msg = "<span style=\"color : red; \">" + msg + "</span><br />";
-			uProbeX::log_textedit->insertHtml(h_msg);
-		}
+		fprintf(stderr, "Critical: %s (%s:%u, %s)\n", localMsg.constData(), contextFile, context.line, contextFunction);
+		h_msg = "<span style=\"color : red; \">" + msg + "</span><br />";
+		appendLogHtmlOnGuiThread(h_msg, false);
 	}
 	else if (type == QtFatalMsg)
 	{
-		fprintf(stderr, "Fatal: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+		fprintf(stderr, "Fatal: %s (%s:%u, %s)\n", localMsg.constData(), contextFile, context.line, contextFunction);
 	}
 	else
 	{
-		fprintf(stderr, "Unknown: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+		fprintf(stderr, "Unknown: %s (%s:%u, %s)\n", localMsg.constData(), contextFile, context.line, contextFunction);
 	}
 	
 }
@@ -81,8 +167,7 @@ void myMessageOutput(QtMsgType type, const QMessageLogContext &context, const QS
 // This redirects console logs from DLL's to out log widget
 void readSTDOUT()
 {
-	std::string line = strCout.str();
-	strCout.str(std::string());
+	std::string line = consoleLogBuffer().take();
 	if (line.length() > 0)
 	{
 		qDebug() << line.c_str();
@@ -125,7 +210,7 @@ int main(int argc, char** argv)
 	}
 	qInstallMessageHandler(myMessageOutput);
 
-	std::cout.rdbuf(strCout.rdbuf());
+	ScopedCoutRedirect coutRedirect(&consoleLogBuffer());
 	QTimer timer;
 	QObject::connect(&timer, &QTimer::timeout, readSTDOUT);
 	timer.start(1000);

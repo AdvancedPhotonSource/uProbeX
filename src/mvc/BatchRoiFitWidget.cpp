@@ -6,6 +6,7 @@
 #include "mvc/BatchRoiFitWidget.h"
 #include <QApplication>
 #include <core/process_whole.h>
+#include <core/Hdf5Mutex.h>
 #include <QScrollArea>
 #include <QMessageBox>
 #include <QDesktopServices>
@@ -20,7 +21,7 @@ BatchRoiFitWidget::BatchRoiFitWidget(std::string directory, QWidget *parent) : Q
     _total_itr = 0;
     _canceled = false;
     _worker = nullptr;
-    if (_directory[directory.length() - 1] != DIR_END_CHAR)
+    if (false == _directory.empty() && _directory.back() != DIR_END_CHAR)
     {
         _directory += DIR_END_CHAR;
     }
@@ -275,6 +276,12 @@ bool BatchRoiFitWidget::buildAnalysisJob()
 // frame. No null check can fix that; the work had to come off the GUI thread.
 void BatchRoiFitWidget::runProcessing()
 {
+    if (_directory.empty())
+    {
+        QMessageBox::warning(this, "No dataset directory", "Select a dataset directory before running the batch ROI fit.");
+        return;
+    }
+
     if (_worker != nullptr)
     {
         // Already fitting. The Run button is disabled while a fit is in flight, but
@@ -317,6 +324,7 @@ void BatchRoiFitWidget::runProcessing()
 
         try
         {
+            hdf5::Lock hdf5_lock(hdf5::mutex());
             if (io::file::init_analysis_job_detectors(analysis_job))
             {
                 io::file::File_Scan::inst()->populate_netcdf_hdf5_files(analysis_job->dataset_directory);
