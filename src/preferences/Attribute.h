@@ -131,8 +131,14 @@ private:
 
    /**
     * @brief m_parent
+    *
+    * Initialized here because neither constructor in Attribute.cpp touches it. Only
+    * AttributeGroup::append() ever sets it, so an attribute that has not been appended
+    * carried an indeterminate pointer - and every "if (mGrp != nullptr)" guard against
+    * getParent() in PreferencesPythonFunc and AttributeGroupModel passed on garbage
+    * rather than catching it.
     */
-   AttributeGroup* m_parent;
+   AttributeGroup* m_parent = nullptr;
 
    /**
     * Type of solver e.g. motor record

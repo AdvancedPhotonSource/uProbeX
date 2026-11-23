@@ -7,8 +7,12 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPainter>
+#include <QFont>
+#include <QFontMetrics>
 #include <tiffio.h>
 #include "core/str_defines.h"
+#include "core/Hdf5Mutex.h"
 
 
 const Eigen::Index Counter1 = 0;
@@ -283,9 +287,11 @@ void MapsH5Model::clearAllMapRois()
 
 //---------------------------------------------------------------------------
 
-void MapsH5Model::appendMapRoi(std::string name, struct Map_ROI roi)
+struct Map_ROI& MapsH5Model::appendMapRoi(const std::string& name, const struct Map_ROI& roi)
 {
-    _map_rois[name] = roi;
+    Map_ROI& stored = _map_rois[name];
+    stored = roi;
+    return stored;
 }
 
 //---------------------------------------------------------------------------
@@ -408,6 +414,8 @@ void MapsH5Model::loadAllRoiMaps()
 
 void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+
     bool resave = false;
     QFile roiFile(roi_file_name);
     if (!roiFile.open(QIODevice::ReadOnly))
@@ -423,12 +431,14 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
 
     if (rootJson.contains(STR_MAPS_ROIS.c_str()) && rootJson[STR_MAPS_ROIS.c_str()].isArray())
     {
-        bool int_spec_loaded = false;
         QJsonArray rois = rootJson[STR_MAPS_ROIS.c_str()].toArray();
         for (int i = 0; i < rois.size(); ++i)
         {
             QJsonObject jsonRoi = rois[i].toObject();
 
+            // Per roi: a roi that has an int spec array but no entry for this dataset still
+            // needs the hdf5 fallback below, so this must not carry over from the previous roi.
+            bool int_spec_loaded = false;
             Map_ROI mroi;
             mroi.name = jsonRoi.value(STR_MAP_ROI_NAME.c_str()).toString().toStdString();
             mroi.color = QColor::fromRgba(QRgb(jsonRoi.value(STR_MAP_ROI_COLOR.c_str()).toInt()));
@@ -474,7 +484,10 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
                             mroi.int_spec[stdFilename].resize(json_spec_arr.size());
                             for (int n = 0; n < json_spec_arr.size(); ++n)
                             {
-                                mroi.int_spec[stdFilename](n) = json_spec_arr[n].toInt();
+                                // toDouble, not toInt: these are summed float counts and are
+                                // routinely fractional, and QJsonValue::toInt() yields 0 for
+                                // any value that is not exactly integral.
+                                mroi.int_spec[stdFilename](n) = json_spec_arr[n].toDouble();
                             }
                             mroi.int_spec[stdFilename].elapsed_livetime(json_int_spec[STR_ELT.c_str()].toDouble());
                             mroi.int_spec[stdFilename].elapsed_realtime(json_int_spec[STR_ERT.c_str()].toDouble());
@@ -485,18 +498,18 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
                     }
                 }
             }
-            else
-            {
-                int_spec_loaded = false;
-            }
 
             if (false == int_spec_loaded)
             {
                 std::string stdFileName = base_filename.toStdString();
                 std::unordered_map<std::string, double> scaler_sum_map;
-                // load it 
-                if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_dir.absolutePath().toStdString(), mroi.pixel_list, &(mroi.int_spec[stdFileName]), scaler_sum_map))
+                // Load into a local and only insert on success: indexing int_spec here would
+                // leave behind an empty spectra on failure, which then gets "normalized",
+                // plotted, offered in the fit selector and resaved over the real data.
+                data_struct::Spectra<double> loaded_spec;
+                if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_dir.absolutePath().toStdString(), mroi.pixel_list, &loaded_spec, scaler_sum_map))
                 {
+                    mroi.int_spec[stdFileName] = std::move(loaded_spec);
                     QJsonArray jsonIntSpecArr = jsonRoi[STR_MAP_ROI_INT_SPEC.c_str()].toArray();
 
                     QJsonObject json_int_spec;
@@ -535,6 +548,9 @@ void MapsH5Model::load_roi_map(QString roi_file_name, QString base_filename)
                     logW << "Failed to load roi spectra for " << _dir.absolutePath().toStdString() << "\n";
                 }
             }
+            // this roi was built field by field above, so the normalized spectra the spectra widget
+            // plots has to be generated here the way the Map_ROI constructor would have
+            mroi.normalize_int_spec_by_elt(base_filename.toStdString());
             _map_rois[mroi.name] = mroi;
             logI<< "Loading roi: "<< mroi.name<<"\n";
         }
@@ -621,6 +637,10 @@ void MapsH5Model::getIntegratedSpectra(data_struct::Spectra<double>& out_spectra
 
 bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<float> &x_arr, data_struct::ArrayXXr<float> &y_arr)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+    x_arr.resize(0, 0);
+    y_arr.resize(0, 0);
+
     std::string x_axis_loc_9 = "/MAPS/x_axis";
     std::string x_axis_loc_10 = "/MAPS/Scan/x_axis";
     std::string y_axis_loc_9 = "/MAPS/y_axis";
@@ -660,6 +680,7 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<f
         }
     }
 
+    bool loaded = false;
     if (x_id > -1 && y_id > -1)
     {
         hid_t x_space_id = H5Dget_space(x_id);
@@ -667,51 +688,46 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<f
         
         hsize_t x_dims_in[2] = { 0,0 };
         hsize_t y_dims_in[2] = { 0,0 };
-        int dims = H5Sget_simple_extent_ndims(x_space_id);
-        int xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
-        int ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
+        int x_dims = x_space_id >= 0 ? H5Sget_simple_extent_ndims(x_space_id) : -1;
+        int y_dims = y_space_id >= 0 ? H5Sget_simple_extent_ndims(y_space_id) : -1;
+        int xstatus_n = -1;
+        int ystatus_n = -1;
+        if ((x_dims == 1 || x_dims == 2) && (y_dims == 1 || y_dims == 2))
+        {
+            xstatus_n = H5Sget_simple_extent_dims(x_space_id, &x_dims_in[0], nullptr);
+            ystatus_n = H5Sget_simple_extent_dims(y_space_id, &y_dims_in[0], nullptr);
+        }
         if (xstatus_n > -1 && ystatus_n > -1)
         {
-            if(dims == 1)
+            if(x_dims == 1 && y_dims == 1)
             {
                 x_arr.resize(1, x_dims_in[0]);
                 y_arr.resize(y_dims_in[0],1);
             }
-            else if(dims == 2)
+            else if(x_dims == 2 && y_dims == 2)
             {
                 x_arr.resize(x_dims_in[0], x_dims_in[1]);
                 y_arr.resize(y_dims_in[0], y_dims_in[1]);
             }
             else
             {
-                logE<<"Can not load dims size "<<dims<<"\n";
-                if (x_space_id > -1)
-                {
-                    H5Sclose(x_space_id);
-                }
-                if (y_space_id > -1)
-                {
-                    H5Sclose(y_space_id);
-                }
-                if (x_id > -1)
-                {
-                    H5Dclose(x_id);
-                }
-                if(y_id > -1)
-                {
-                    H5Dclose(y_id);
-                }
-                return false;
+                logE<<"Mismatched x/y axis ranks "<<x_dims<<" and "<<y_dims<<"\n";
             }
-            hid_t error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id, x_space_id, H5P_DEFAULT, x_arr.data());
-            if (error > 0)
+            if (x_arr.size() > 0 && y_arr.size() > 0)
             {
-                logW << "Could not load x_axis\n";
-            }
-            error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id, y_space_id, H5P_DEFAULT, y_arr.data());
-            if (error > 0)
-            {
-                logW << "Could not load y_axis\n";
+                const herr_t x_error = H5Dread(x_id, H5T_NATIVE_FLOAT, x_space_id,
+                                                x_space_id, H5P_DEFAULT, x_arr.data());
+                const herr_t y_error = H5Dread(y_id, H5T_NATIVE_FLOAT, y_space_id,
+                                                y_space_id, H5P_DEFAULT, y_arr.data());
+                loaded = x_error >= 0 && y_error >= 0;
+                if (x_error < 0)
+                {
+                    logW << "Could not load x_axis\n";
+                }
+                if (y_error < 0)
+                {
+                    logW << "Could not load y_axis\n";
+                }
             }
         }
 
@@ -730,13 +746,20 @@ bool MapsH5Model::load_x_y_motors_only(QString filepath, data_struct::ArrayXXr<f
     }
 
     H5Fclose(file_id);
-    return true;
+    if (false == loaded)
+    {
+        x_arr.resize(0, 0);
+        y_arr.resize(0, 0);
+    }
+    return loaded;
 }
 
 //---------------------------------------------------------------------------
 
 bool MapsH5Model::load(QString filepath)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+
     H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
     std::chrono::time_point<std::chrono::system_clock> start, end;
     start = std::chrono::system_clock::now();
@@ -772,6 +795,7 @@ bool MapsH5Model::load(QString filepath)
         else
         {
             _version = 10.0;
+            H5Gclose(analyzed_grp_id);
         }
 
         
@@ -791,63 +815,36 @@ bool MapsH5Model::load(QString filepath)
         {
             H5Fflush(file_id, H5F_SCOPE_LOCAL);
 
-            ssize_t obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_DATASET | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
+            auto close_open_objects = [file_id](unsigned int object_type, auto close_object, const char* object_name)
             {
-                logI << "closing forgotten datasets: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_DATASET, -1, objs) > -1)
+                const unsigned int local_type = object_type | H5F_OBJ_LOCAL;
+                const ssize_t object_count = H5Fget_obj_count(file_id, local_type);
+                if (object_count <= 0)
                 {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Dclose(objs[i]);
-                    }
+                    return;
                 }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_GROUP | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
-            {
-                logI << "closing forgotten groups: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_GROUP, -1, objs) > -1)
+
+                logI << "closing forgotten " << object_name << ": " << object_count << "\n";
+                std::vector<hid_t> objects(static_cast<size_t>(object_count));
+                const ssize_t returned_count = H5Fget_obj_ids(file_id, local_type,
+                                                               objects.size(), objects.data());
+                if (returned_count <= 0)
                 {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Gclose(objs[i]);
-                    }
+                    return;
                 }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_DATATYPE | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
-            {
-                logI << "closing forgotten datatypes: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_DATATYPE, -1, objs) > -1)
+
+                for (ssize_t i = 0; i < returned_count; ++i)
                 {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Tclose(objs[i]);
-                    }
+                    close_object(objects[static_cast<size_t>(i)]);
                 }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_ATTR | H5F_OBJ_LOCAL);
-            if (obj_cnt > 0)
-            {
-                logI << "closing forgotten attributes: " << obj_cnt << "\n";
-                hid_t* objs = new hid_t[obj_cnt];
-                if (H5Fget_obj_ids(file_id, H5F_OBJ_ATTR, -1, objs) > -1)
-                {
-                    for (int i = 0; i < obj_cnt; i++)
-                    {
-                        H5Aclose(objs[i]);
-                    }
-                }
-                delete[] objs;
-            }
-            obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_ALL | H5F_OBJ_LOCAL);
+            };
+
+            close_open_objects(H5F_OBJ_DATASET, H5Dclose, "datasets");
+            close_open_objects(H5F_OBJ_GROUP, H5Gclose, "groups");
+            close_open_objects(H5F_OBJ_DATATYPE, H5Tclose, "datatypes");
+            close_open_objects(H5F_OBJ_ATTR, H5Aclose, "attributes");
+
+            const ssize_t obj_cnt = H5Fget_obj_count(file_id, H5F_OBJ_ALL | H5F_OBJ_LOCAL);
             if (obj_cnt > 1) //file is still open
             {
                 logI << "**** did not close total objects " << obj_cnt << "\n";
@@ -2452,6 +2449,8 @@ bool MapsH5Model::get_copy_lhcp_rhcp_spectra(data_struct::Spectra<double>& out_l
 
 bool MapsH5Model::load_pixel_spectra(const std::pair<int, int>& point, ArrayDr& spectra)
 {
+    hdf5::Lock hdf5_lock(hdf5::mutex());
+
     std::string mca_arr_path_10 = "/MAPS/Spectra/mca_arr";
     std::string mca_arr_path_9 = "/MAPS/mca_arr";
 
@@ -2536,14 +2535,16 @@ bool MapsH5Model::_load_counts_10(hid_t maps_grp_id)
         return false;
     }
 
+    bool loaded_any_counts = false;
     for( std::string group_name : analyzed_groups )
     {
-        _load_analyzed_counts_10(analyzed_grp_id, group_name);
+        loaded_any_counts = _load_analyzed_counts_10(analyzed_grp_id, group_name)
+            || loaded_any_counts;
     }
 
     H5Gclose(analyzed_grp_id);
 
-    return true;
+    return loaded_any_counts;
 }
 
 //---------------------------------------------------------------------------
@@ -3187,6 +3188,114 @@ QPixmap MapsH5Model::gen_pixmap(const GenerateImageProp& props, ArrayXXr<float>&
 
 //---------------------------------------------------------------------------
 
+int map_render_scale(const GenerateImageProp& props, int data_rows)
+{
+    // Matches gen_image's own test for whether a colorbar gets drawn at all.
+    if (props.show_legend == false || data_rows <= 3)
+    {
+        return 1;
+    }
+    // Enough rows that the label text below has room to be read, without blowing up maps that
+    // are already large. Deliberately truncating: a map that is already over half the target
+    // reads fine as it is and does not need its memory doubled to gain nothing. Capped because
+    // the grid view holds one of these per cell.
+    const int target_rows = 600;
+    int scale = target_rows / data_rows;
+    return std::max(1, std::min(8, scale));
+}
+
+//---------------------------------------------------------------------------
+
+// Color table slot reserved for the colorbar background. It is forced to black and no
+// measurement is ever mapped to it, so the band behind the strip is a fixed color rather than
+// whatever the selected colormap happens to hold there. Measurements use the rest of the table.
+static const int COLORBAR_BG_IDX = 0;
+static const int COLORMAP_FIRST_IDX = COLORBAR_BG_IDX + 1;
+static const int COLORMAP_LAST_IDX = 255;
+
+//---------------------------------------------------------------------------
+
+// Appends the colormap strip and its end values to an already upscaled map. The strip is drawn
+// here rather than into the data image so it keeps a fixed orientation - max at the top - instead
+// of being flipped along with the map by invert_y.
+static QImage draw_colorbar(const QImage& map, const QVector<QRgb>& color_table, float counts_min, float counts_max)
+{
+    if (map.isNull() || map.height() < 1)
+    {
+        return map;
+    }
+
+    const QString max_str = QString::number(counts_max, 'g', 4);
+    const QString min_str = QString::number(counts_min, 'g', 4);
+
+    QFont font;
+    // Tie the text to the rendered height: the views stretch the pixmap to fit the cell, so a
+    // fixed size would come out different on every map.
+    font.setPixelSize(std::max(9, std::min(28, (int)(map.height() * 0.055))));
+    QFontMetrics metrics(font);
+
+    const int pad = std::max(2, metrics.height() / 4);
+    // tightBoundingRect catches glyph overhang that horizontalAdvance leaves out, so the last
+    // digit is not shaved off by the right edge of the image.
+    const int text_w = std::max(std::max(metrics.horizontalAdvance(max_str), metrics.horizontalAdvance(min_str)),
+                                std::max(metrics.tightBoundingRect(max_str).width(), metrics.tightBoundingRect(min_str).width()));
+
+    int strip_w = (int)(map.width() * 0.05);
+    strip_w = std::max(3, std::min(strip_w, 40));
+
+    const int strip_x = map.width() + pad;
+    const int strip_top = (int)(map.height() * 0.1);
+    const int strip_bottom = map.height() - strip_top;
+    const int strip_h = strip_bottom - strip_top;
+    if (strip_h < 1)
+    {
+        return map;
+    }
+
+    // The reserved slot, not a color borrowed from the middle of the data range.
+    QRgb fill = color_table.size() > COLORBAR_BG_IDX ? color_table[COLORBAR_BG_IDX] : qRgb(0, 0, 0);
+    QColor fill_color(fill);
+    // Rec. 601 luma, matching the foreground pick in ImageViewWidgetCompact::createLayout. The
+    // reserved color is black today, so this picks white; left as a computation so the text stays
+    // readable if that color is ever changed.
+    double luma = 0.299 * fill_color.redF() + 0.587 * fill_color.greenF() + 0.114 * fill_color.blueF();
+    QColor text_color = luma > 0.5 ? Qt::black : Qt::white;
+
+    QImage out(strip_x + strip_w + pad + text_w + pad, map.height(), QImage::Format_RGB32);
+    out.fill(fill_color);
+
+    QPainter painter(&out);
+    painter.drawImage(0, 0, map);
+
+    // Top of the strip is the top of the color table, so the gradient reads the same way round
+    // as the numbers beside it regardless of invert_y. Spans the same range the measurements
+    // were mapped into, so the strip shows exactly the colors the map can contain.
+    const int span = COLORMAP_LAST_IDX - COLORMAP_FIRST_IDX;
+    for (int row = 0; row < strip_h; row++)
+    {
+        int idx = COLORMAP_LAST_IDX - ((row * span) / std::max(1, strip_h - 1));
+        idx = std::max(COLORMAP_FIRST_IDX, std::min(COLORMAP_LAST_IDX, idx));
+        QRgb c = color_table.size() > idx ? color_table[idx] : qRgb(idx, idx, idx);
+        painter.fillRect(QRect(strip_x, strip_top + row, strip_w, 1), QColor(c));
+    }
+
+    painter.setFont(font);
+    painter.setPen(text_color);
+
+    const int text_x = strip_x + strip_w + pad;
+    const int text_h = metrics.height();
+    const int max_y = std::max(0, std::min(map.height() - text_h, strip_top - text_h / 2));
+    const int min_y = std::max(0, std::min(map.height() - text_h, strip_bottom - text_h / 2));
+
+    painter.drawText(QRect(text_x, max_y, text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, max_str);
+    painter.drawText(QRect(text_x, min_y, text_w, text_h), Qt::AlignLeft | Qt::AlignVCenter, min_str);
+    painter.end();
+
+    return out;
+}
+
+//---------------------------------------------------------------------------
+
 QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& normalized) const
 {
 
@@ -3201,6 +3310,12 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
     int height = 0;
     int width = 0;
 
+    if (draw && normalized.size() == 0)
+    {
+        logW << "Cannot render an empty map for " << props.element << "\n";
+        return QImage();
+    }
+
     if (draw)
     {
         height = static_cast<int>(normalized.rows());
@@ -3212,41 +3327,53 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
             normalized = normalized.unaryExpr([](float v) { return std::isfinite(v) ? v : 0.0f; });
         }
 
-        // add to width for color maps ledgend
-        int cm_ledgend = width * .05; // add 5% width for ledgend
-        if (cm_ledgend == 0)
-        {
-            cm_ledgend = 3;
-        }
-        if (height <= 3 || props.show_legend == false)
-        {
-            cm_ledgend = 0;
-        }
+        // The colorbar and its labels are composed on afterwards, at the upscaled resolution,
+        // so this image holds nothing but the measurements - one pixel each.
+        const bool draw_colorbar_strip = (props.show_legend && height > 3);
+        const int render_scale = map_render_scale(props, height);
 
-                
-        QImage image(width + cm_ledgend, height, QImage::Format_Indexed8);
-        
+        QImage image(width, height, QImage::Format_Indexed8);
+
         // Every pixel below is written as an 8 bit index, so the table has to cover all 256 of
         // them. A short table leaves the conversion to RGB32 indexing past the end of it.
+        QVector<QRgb> color_table;
         if(props.selected_colormap != nullptr && props.selected_colormap->size() == 256)
         {
-            image.setColorTable(*props.selected_colormap);
+            // Copied, not referenced: the colormap is shared with every other map on screen and
+            // the reserved slot below would otherwise be written into all of them.
+            color_table = *props.selected_colormap;
         }
         else
         {
-            QVector<QRgb> gray_colormap;
             for (int i = 0; i < 256; i++)
             {
-                gray_colormap.append(qRgb(i, i, i));
+                color_table.append(qRgb(i, i, i));
             }
-            image.setColorTable(gray_colormap);
         }
-        
+        // Reserved for the colorbar background. Measurements are mapped into the slots after it.
+        color_table[COLORBAR_BG_IDX] = qRgb(0, 0, 0);
+        image.setColorTable(color_table);
 
-        float counts_max;
-        float counts_min;
+
+        // Seeded so the two branches below are not the only thing standing between an unknown
+        // contrast_limits string and uninitialized reads, now that the legend labels print them.
+        float counts_max = 0.0f;
+        float counts_min = 0.0f;
+        // Eigen does not check sizes in release, so a scaler saved at a different scan size
+        // than the counts would read off the end. MapsElementsWidget's export path already
+        // tests this before the same division; gen_pixmap did not.
+        const bool normalizer_fits = (props.normalizer != nullptr
+                                      && props.normalizer->rows() == normalized.rows()
+                                      && props.normalizer->cols() == normalized.cols());
+        if (props.normalizer != nullptr && false == normalizer_fits)
+        {
+            logW << "Scaler is " << props.normalizer->rows() << "x" << props.normalizer->cols()
+                 << " but counts are " << normalized.rows() << "x" << normalized.cols()
+                 << "; skipping normalization for " << props.element << "\n";
+        }
+
         // show normalized by mass calib curve
-        if (props.normalizer != nullptr && props.calib_curve != nullptr)
+        if (normalizer_fits && props.calib_curve != nullptr)
         {
             if (props.calib_curve->calib_curve.count(props.element) > 0)
             {
@@ -3261,7 +3388,7 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
                 normalized = normalized.unaryExpr([min_coef](float v) { return std::isfinite(v) ? v : min_coef; });
             }
         }
-        else if (props.normalizer != nullptr)
+        else if (normalizer_fits)
         {
             // show normalized just by scaler
             normalized /= (*props.normalizer);
@@ -3340,6 +3467,13 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
         //unsigned char *data = new unsigned char[height * bpl];
         
         float max_min = counts_max - counts_min;
+        // A flat map - a constant scaler channel, or a contrast range collapsed to a point -
+        // would divide by zero here and cast a NaN to unsigned char, which is undefined. Every
+        // measurement is the same value in that case, so put them all at the bottom of the scale.
+        const bool flat = !(max_min > 0.0f);
+        // Measurements never take COLORBAR_BG_IDX, so the colorbar background stays a color that
+        // cannot be confused with a reading.
+        const float span = (float)(COLORMAP_LAST_IDX - COLORMAP_FIRST_IDX);
         for (int row = 0; row < height; ++row)
         {
             for (int col = 0; col < width; ++col)
@@ -3348,68 +3482,48 @@ QImage MapsH5Model::gen_image(const GenerateImageProp& props, ArrayXXr<float>& n
                 float cnts = normalized(row, col);
                 cnts = std::min(counts_max, cnts);
                 cnts = std::max(counts_min, cnts);
-                //data[row * bpl + col] = static_cast<unsigned char>(((cnts - counts_min) / max_min) * 255);
                 //convert to pixel
-                unsigned char data = (unsigned char)(((cnts - counts_min) / max_min) * 255);
+                unsigned char data = (unsigned char)COLORMAP_FIRST_IDX;
+                if (flat == false)
+                {
+                    data = (unsigned char)(COLORMAP_FIRST_IDX + (((cnts - counts_min) / max_min) * span));
+                }
                 image.setPixel(col, row, data);
             }
         }
         //memcpy(image.bits(), data, height * bpl);
         //delete [] data;
 
-        if (height > 3 || props.show_legend == true)
-        {
-            // add color map ledgend
-            int startH = height * .1;
-            int endH = height - startH;
-            int startW = width + 1;
-            int endW = width + cm_ledgend;
-            if (cm_ledgend == 3)
-            {
-                endW--;
-            }
-
-            float inc = 255.0 / float(endH - startH);
-            float fcol = 255.0;
-
-            for (int row = 0; row < height; row++)
-            {
-                if (row >= startH && row <= endH)
-                {
-                    for (int col = width; col < width + cm_ledgend; col++)
-                    {
-                        if (col >= startW && col <= endW)
-                        {
-                            image.setPixel(col, row, static_cast<unsigned char>(fcol));
-                        }
-                        else
-                        {
-                            image.setPixel(col, row, static_cast<unsigned char>(127));
-                        }
-                    }
-                    fcol -= inc;
-                    fcol = std::max(fcol, float(0.0));
-                }
-                else
-                {
-                    for (int col = width; col < width + cm_ledgend; col++)
-                    {
-                        image.setPixel(col, row, static_cast<unsigned char>(127));
-                    }
-                }
-            }
-        }
-        
         if (props.invert_y)
         {
             image = image.mirrored(false, true);
         }
 
+        QImage rgb_image = image.convertToFormat(QImage::Format_RGB32);
+
+        if (render_scale > 1)
+        {
+            // FastTransformation is nearest neighbour, so each measurement comes out as an exact
+            // render_scale x render_scale block of identical pixels. Nothing is interpolated and
+            // no bin is blended into its neighbour - there are simply more pixels per bin, which
+            // gives the labels below room to be legible. Every scene-position-to-data-index
+            // conversion divides by the same factor, via map_render_scale().
+            rgb_image = rgb_image.scaled(width * render_scale, height * render_scale, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        }
+
+        if (draw_colorbar_strip)
+        {
+            // Labelled with the values the color scale actually maps, and composed after the
+            // mirror and the RGB conversion so the glyphs are neither flipped nor quantized down
+            // to the 256 entry color table.
+            rgb_image = draw_colorbar(rgb_image, image.colorTable(), counts_min, counts_max);
+        }
+
         //end = std::chrono::system_clock::now();
         //std::chrono::duration<double> elapsed_seconds = end - start;
         //logI << "=-=-=-=-=-=- Total elapsed time: " << elapsed_seconds.count() << "s =-=-=-=-=-=-=-\n" << std::endl; //endl will flush the print.
-       
-        return image.convertToFormat(QImage::Format_RGB32);
+
+        return rgb_image;
     }
 
     return QImage();
@@ -3652,6 +3766,17 @@ void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, con
                     {
                         normalizer = &(scalers->at(n_itr));
                     }
+                    // Dropped rather than used at the wrong size: counts /= (*normalizer)
+                    // below is unchecked in release. Every normalizer != nullptr test after
+                    // this point then correctly falls through to the un-normalized branch.
+                    if (normalizer != nullptr
+                        && (normalizer->rows() != _y_axis.rows() || normalizer->cols() != _x_axis.cols()))
+                    {
+                        logW << "Scaler " << n_itr << " is " << normalizer->rows() << "x" << normalizer->cols()
+                             << " but the scan is " << _y_axis.rows() << "x" << _x_axis.cols()
+                             << "; exporting without normalization\n";
+                        normalizer = nullptr;
+                    }
                     Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
 
                     for (auto& e_itr : *a_itr.second)
@@ -3754,6 +3879,17 @@ void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, con
                 {
                     normalizer = &(scalers->at(n_itr));
                 }
+                // The per pixel reads below are (*normalizer)(yidx, xidx) with yidx and xidx
+                // bounded by the scan axes, not by the scaler, and Eigen does not range check
+                // in release. Drop a scaler that is not the scan's size.
+                if (normalizer != nullptr
+                    && (normalizer->rows() != _y_axis.rows() || normalizer->cols() != _x_axis.cols()))
+                {
+                    logW << "Scaler " << n_itr << " is " << normalizer->rows() << "x" << normalizer->cols()
+                         << " but the scan is " << _y_axis.rows() << "x" << _x_axis.cols()
+                         << "; exporting without normalization\n";
+                    normalizer = nullptr;
+                }
                 Calibration_curve<double>* calib_curve = get_calibration_curve(a_itr.first, n_itr);
 
                 std::string save_file_name = ascii_dir.absolutePath().toStdString() + QDir::separator().toLatin1() + getDatasetName().toStdString();
@@ -3849,8 +3985,8 @@ void MapsH5Model::export_images(bool savePNG, bool saveTIFF, bool saveASCII, con
 
                     out_stream << "\n";
                     // check if there are any ROI's and export them
-                    const std::unordered_map<std::string, Map_ROI> rois = get_map_rois();
-                    for (auto itr_roi : rois)
+                    const std::unordered_map<std::string, Map_ROI>& rois = get_map_rois();
+                    for (const auto& itr_roi : rois)
                     {
                         out_stream << "ROI: "<<itr_roi.first<<"\n";
                         for (auto& p_itr : itr_roi.second.pixel_list)

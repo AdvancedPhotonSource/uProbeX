@@ -42,7 +42,9 @@ void AttributeGroupModel::appendGroup(AttributeGroup *mGroup)
 {
 
    int s = m_groups.size();
-   beginInsertRows(QModelIndex(), s, s+1);
+   // (s, s) not (s, s+1): one group is appended, so one row. Claiming two left the
+   // view believing rowCount had grown by two while rowCount() reports m_groups.size().
+   beginInsertRows(QModelIndex(), s, s);
    m_groups.append(mGroup);
    endInsertRows();
 
@@ -312,7 +314,9 @@ void AttributeGroupModel::Inserted(AttributeGroup* grp, int idx)
    if (rowIdx > -1)
    {
       QModelIndex pIdx = createIndex(rowIdx, 0, grp);
-      beginInsertRows(pIdx, idx, idx+1);
+      // AttributeGroup::append() emits Inserted(this, idx) for a single attribute, so
+      // this is one row, matching the (idx, idx) the Removed handler below already uses.
+      beginInsertRows(pIdx, idx, idx);
       endInsertRows();
    }
 

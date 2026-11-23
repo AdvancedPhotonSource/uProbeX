@@ -71,7 +71,7 @@ static const int ID_PYTHON = 2;
 //---------------------------------------------------------------------------
 
 VLM_Widget::VLM_Widget(QWidget* parent)
-: AbstractImageWidget(1,1,parent)
+: AbstractImageWidget(1,1,false,parent)
 {
 
    _init();
@@ -81,7 +81,7 @@ VLM_Widget::VLM_Widget(QWidget* parent)
 //---------------------------------------------------------------------------
 
 VLM_Widget::VLM_Widget(ScanRegionDialog* scan_dialog, QWidget* parent)
-: AbstractImageWidget(1,1,parent)
+: AbstractImageWidget(1,1,false,parent)
 {
    _scan_dialog = scan_dialog;
    _init();
@@ -90,7 +90,7 @@ VLM_Widget::VLM_Widget(ScanRegionDialog* scan_dialog, QWidget* parent)
 
 //---------------------------------------------------------------------------
 
-VLM_Widget::VLM_Widget(QString dataset_name, QWidget* parent) : AbstractImageWidget(1,1,parent)
+VLM_Widget::VLM_Widget(QString dataset_name, QWidget* parent) : AbstractImageWidget(1,1,false,parent)
 {
    m_datasetPath = dataset_name;
    _init();
@@ -373,21 +373,28 @@ void VLM_Widget::_createLightToMicroCoords(int id)
 #endif
    }
 
-   if (lightTransformer->Init(allCoefs))
+   if (false == lightTransformer->Init(allCoefs))
    {
-      if (m_lightToMicroCoordModel != nullptr)
-      {
-         m_lightToMicroCoordModel->setTransformer(lightTransformer);
-      }
-      else
-      {
-         m_lightToMicroCoordModel = std::make_unique<gstar::CoordinateModel>(lightTransformer);
-      }
+      // Fall back rather than carry on with no transformer. The old code just warned and
+      // dropped lightTransformer on the floor, which left m_lightToMicroCoordModel either
+      // null or holding the nullptr set above - and _createSolver() immediately does
+      // m_lightToMicroCoordModel->getTransformer()->getAllCoef() with no check. A linear
+      // transformer keeps every downstream caller's assumption true; its Init() cannot
+      // fail and it carries its own default coefficients.
+      QMessageBox::critical(nullptr, "uProbeX", "Error initializing Transformer. Falling back to the linear transformer.");
+      logW << "Could not init Transformer, falling back to LinearCoordTransformer\n";
+      delete lightTransformer;
+      lightTransformer = new LinearCoordTransformer();
+      lightTransformer->Init(allCoefs);
+   }
+
+   if (m_lightToMicroCoordModel != nullptr)
+   {
+      m_lightToMicroCoordModel->setTransformer(lightTransformer);
    }
    else
    {
-      QMessageBox::critical(nullptr, "uProbeX", "Error initializeing Transformer!");
-      logW << "Could not init Transformer\n";
+      m_lightToMicroCoordModel = std::make_unique<gstar::CoordinateModel>(lightTransformer);
    }
 
    m_lightToMicroCoordWidget->setModel(m_lightToMicroCoordModel.get());
@@ -440,7 +447,10 @@ if (id == ID_LINEAR)
    else
    {
 #ifdef _BUILD_WITH_PYTHON_SUPPORT
-      PythonSolver* ps = new PythonSolver();
+      // Owned here until setImpl() takes it: every path out of the check below
+      // returns without reaching setImpl(), and the raw new leaked the solver each
+      // time the user picked a python solver that failed to initialize.
+      std::unique_ptr<PythonSolver> ps = std::make_unique<PythonSolver>();
 
       QString pythonFileName = Preferences::inst()->getValue(STR_PRF_PythonSolverName).toString();
       QFileInfo fileInfo = QFileInfo(pythonFileName);
@@ -455,12 +465,13 @@ if (id == ID_LINEAR)
       {
          logE << "Error reading options for python solver, reverting to NelderMeadSolver\n";
          QMessageBox::critical(nullptr, "uProbeX", "Error initializeing Python solver,  reverting to NelderMeadSolver");
+         // ID_LINEAR, so the recursion goes down the NelderMead branch and stops.
          Preferences::inst()->setValue(STR_PRF_SolverCheckedID, 0);
          _createSolver();
          return;
       }
       m_solverParameterParse->getOptions(dict_options);
-      m_solver->setImpl(ps);
+      m_solver->setImpl(ps.release());
 #else
       logE << "Python support was not built into this application, reverting to NelderMeadSolver\n";
       QMessageBox::critical(nullptr, "uProbeX", "Python support was not built into this application, reverting to NelderMeadSolver");
@@ -1861,6 +1872,14 @@ void VLM_Widget::setModel(VLM_Model* model)
 
 //---------------------------------------------------------------------------
 
+void VLM_Widget::setOwnedModel(std::unique_ptr<VLM_Model> model)
+{
+    setModel(model.get());
+    _owned_model = std::move(model);
+}
+
+//---------------------------------------------------------------------------
+
 void VLM_Widget::preferenceChanged()
 {
 
@@ -2474,9 +2493,17 @@ void VLM_Widget::loadLiveBackground(QString fileName)
                H5ImageModel h5image_model;
                if(_live_h5model->load(fileName))
                {
+	                  const std::vector<std::string> analyzed_types = _live_h5model->getAnalyzedTypes();
+	                  if (analyzed_types.empty())
+	                  {
+	                     logE << "HDF5 file contains no supported analyzed-count groups: "
+	                          << fileName.toStdString() << "\n";
+	                     _live_h5model.reset();
+	                     return;
+	                  }
                   ArrayXXr<float> normalized;
                   GenerateImageProp props;
-                  props.analysis_type = _live_h5model->getAnalyzedTypes().front();
+	                  props.analysis_type = analyzed_types.front();
                   props.element = STR_TOTAL_FLUORESCENCE_YIELD;
                   props.selected_colormap = ColorMap::inst()->get_color_map(Preferences::inst()->getValue(STR_COLORMAP).toString());
 
@@ -2548,9 +2575,19 @@ void VLM_Widget::loadLiveBackground(QString fileName)
 
 void VLM_Widget::onElementSelect(QString value, int viewIdx)
 {
+	Q_UNUSED(viewIdx);
+	if (_live_h5model == nullptr)
+	{
+	   return;
+	}
+	const std::vector<std::string> analyzed_types = _live_h5model->getAnalyzedTypes();
+	if (analyzed_types.empty())
+	{
+	   return;
+	}
    ArrayXXr<float> normalized;
    GenerateImageProp props;
-   props.analysis_type = _live_h5model->getAnalyzedTypes().front();
+	props.analysis_type = analyzed_types.front();
    props.element = value.toStdString();
    props.selected_colormap = ColorMap::inst()->get_color_map(Preferences::inst()->getValue(STR_COLORMAP).toString());
 
@@ -2577,7 +2614,10 @@ void VLM_Widget::setAvailScans(std::map<QString, BlueskyPlan> * avail_scans)
 void VLM_Widget::onQueueMicroProbeRegion()
 {
    bool found_link = false;
-   ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
+   // getSelectedRegion() returns the base type, and the microprobe tree holds
+   // plain UProbeRegionGraphicsItem objects for every region loaded from the
+   // workspace XML. Only a qobject_cast makes the null test below real.
+   ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
    if (item != nullptr)
    {
       const std::vector<QString> propList = _scan_region_link_dialog->property_list();
@@ -2669,7 +2709,13 @@ void VLM_Widget::onQueueCustomMicroProbeRegion()
    if(_scan_dialog != nullptr)
    {
       const std::vector<QString> propList = _scan_region_link_dialog->property_list();
-      ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
+      // Was a static_cast and was then dereferenced unchecked, below and
+      // again after the dialog returns. See onQueueMicroProbeRegion().
+      ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(getSelectedRegion());
+      if (item == nullptr)
+      {
+         return;
+      }
       QString lastScanType = _scan_dialog->getCurrentScanType();
       // get all scan links
       QJsonArray scan_link_profiles = Preferences::inst()->getValue(STR_PREF_SCAN_LINK_PROFILES).toJsonArray();
@@ -2755,7 +2801,15 @@ void VLM_Widget::updatePlan(const BlueskyPlan &plan)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             if(item->getPlan().uuid == (plan.uuid))
@@ -2789,7 +2843,15 @@ void VLM_Widget::removePlan(const BlueskyPlan &plan)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             BlueskyPlan item_plan = item->getPlan();
@@ -2837,7 +2899,15 @@ void VLM_Widget::setPlanFilename(QString uuid, QString filename)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             BlueskyPlan* item_plan = item->getPlanPtr();
@@ -2892,6 +2962,12 @@ void VLM_Widget::loadScanRegionLinks(QString dir)
          BlueskyPlan item_plan;
          QJsonObject json_region_object = regions[i].toObject();
          ScanRegionGraphicsItem* annotation = new ScanRegionGraphicsItem();
+
+         // Same wiring as onAddMicroProbeRegion(). Without it, deleting a
+         // restored region removes it from the view while its queued scan
+         // stays on the queue server and still runs.
+         connect(annotation, &ScanRegionGraphicsItem::planRemoved, this, &VLM_Widget::onScanRemoved);
+
          if(json_region_object.contains(UPROBE_NAME))
          {
             annotation->setPropertyValue(UPROBE_NAME, json_region_object.value(UPROBE_NAME).toString());
@@ -3149,7 +3225,15 @@ void VLM_Widget::saveScanRegionLinks(QString dir)
    {
       if (child != nullptr)
       {
-         ScanRegionGraphicsItem* item = static_cast<ScanRegionGraphicsItem*>(child);
+         // qobject_cast, not static_cast: this group holds plain
+         // UProbeRegionGraphicsItem objects too - restoreMarkerLoaded()
+         // creates one for every region read back from the workspace XML,
+         // and only onAddMicroProbeRegion() makes the derived type. A
+         // static_cast of those reads _bs_plan past the end of the base
+         // allocation, and the "item != nullptr" test below could never
+         // catch it because a static_cast of a non-null pointer is never
+         // null.
+         ScanRegionGraphicsItem* item = qobject_cast<ScanRegionGraphicsItem*>(child);
          if(item != nullptr)
          {
             QJsonObject json_region_object;

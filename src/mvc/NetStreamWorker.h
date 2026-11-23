@@ -9,6 +9,7 @@
 //---------------------------------------------------------------------------
 
 #include <QThread>
+#include <atomic>
 #include <zmq.hpp>
 #include "io/net/basic_serializer.h"
 #include <string>
@@ -16,6 +17,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QString>
+#include "core/defines.h"
 
 //---------------------------------------------------------------------------
 
@@ -32,26 +34,51 @@ public:
     */
    NetStreamWorker(zmq::context_t *context, QString str_ip, QString port, QString qserv_addr, QObject* parent = nullptr) : QThread(parent)
    {
-       std::string conn_str = "tcp://"+str_ip.toStdString()+":"+port.toStdString();
-       _zmq_socket = std::make_unique<zmq::socket_t>(*context, ZMQ_SUB);
-       _zmq_socket->connect(conn_str);
-       _zmq_socket->set(zmq::sockopt::subscribe, "XRF-Counts");
-       _zmq_socket->set(zmq::sockopt::subscribe, "XRF-Spectra");
-       _zmq_socket->set(zmq::sockopt::subscribe, "XRF-Counts-and-Spectra");
-       _zmq_socket->set(zmq::sockopt::rcvtimeo, 1000); //set timeout to 1000ms
-        if(qserv_addr.length() > 0)
-        {
-            std::string conn_str2 = "tcp://"+qserv_addr.toStdString()+":60625";
-            _zmq_qserv_socket = std::make_unique<zmq::socket_t>(*context, ZMQ_SUB);
-            _zmq_qserv_socket->connect(conn_str2);
-            _zmq_qserv_socket->set(zmq::sockopt::subscribe, "QS_Console");
-            _zmq_qserv_socket->set(zmq::sockopt::rcvtimeo, 1000); //set timeout to 1000ms
-        }
-        else
-        {
-            logW<<"QServer address is not set. Can not connect to QServer\n";
-        }
+       if (context == nullptr)
+       {
+           _error_message = "Could not initialize live stream: ZeroMQ context is unavailable.";
+           _running = false;
+           return;
+       }
 
+       try
+       {
+           std::string conn_str = "tcp://"+str_ip.toStdString()+":"+port.toStdString();
+           _zmq_socket = std::make_unique<zmq::socket_t>(*context, ZMQ_SUB);
+           _zmq_socket->connect(conn_str);
+           _zmq_socket->set(zmq::sockopt::subscribe, "XRF-Counts");
+           _zmq_socket->set(zmq::sockopt::subscribe, "XRF-Spectra");
+           _zmq_socket->set(zmq::sockopt::subscribe, "XRF-Counts-and-Spectra");
+           _zmq_socket->set(zmq::sockopt::rcvtimeo, 1000); //set timeout to 1000ms
+           if(qserv_addr.length() > 0)
+           {
+               std::string conn_str2 = "tcp://"+qserv_addr.toStdString()+":60625";
+               _zmq_qserv_socket = std::make_unique<zmq::socket_t>(*context, ZMQ_SUB);
+               _zmq_qserv_socket->connect(conn_str2);
+               _zmq_qserv_socket->set(zmq::sockopt::subscribe, "QS_Console");
+               _zmq_qserv_socket->set(zmq::sockopt::rcvtimeo, 1000); //set timeout to 1000ms
+           }
+           else
+           {
+               logW<<"QServer address is not set. Can not connect to QServer\n";
+           }
+       }
+       catch (const zmq::error_t& error)
+       {
+           _error_message = QString("Could not initialize live stream: %1").arg(error.what());
+           logE << _error_message.toStdString() << "\n";
+           _zmq_socket.reset();
+           _zmq_qserv_socket.reset();
+           _running = false;
+       }
+       catch (const std::exception& error)
+       {
+           _error_message = QString("Could not initialize live stream: %1").arg(error.what());
+           logE << _error_message.toStdString() << "\n";
+           _zmq_socket.reset();
+           _zmq_qserv_socket.reset();
+           _running = false;
+       }
    }
 
    /**
@@ -64,8 +91,20 @@ public:
 public slots:
     void run() override
     {
-        _running = true;
-        data_struct::Stream_Block<float> *new_packet;
+        if (false == _error_message.isEmpty())
+        {
+            emit newStringData(_error_message);
+            return;
+        }
+        if (_zmq_socket == nullptr)
+        {
+            emit newStringData("Live stream socket is unavailable.");
+            return;
+        }
+
+        try
+        {
+        data_struct::Stream_Block_Ptr<float> new_packet;
         zmq::message_t token, message;
         zmq::recv_result_t res1, res2;
         unsigned int sleepAtVal = 1;
@@ -155,23 +194,47 @@ public slots:
         {
              _zmq_qserv_socket->close();
         }
+        }
+        catch (const zmq::error_t& error)
+        {
+            _running = false;
+            emit newStringData(QString("Live stream communication failed: %1").arg(error.what()));
+        }
+        catch (const std::exception& error)
+        {
+            _running = false;
+            emit newStringData(QString("Live stream processing failed: %1").arg(error.what()));
+        }
+        catch (...)
+        {
+            _running = false;
+            emit newStringData("Live stream processing failed with an unknown error.");
+        }
     }
     void stop() {_running = false;}
 
 signals:
-    void newData(data_struct::Stream_Block<float> *new_packet);
+    void newData(data_struct::Stream_Block_Ptr<float> new_packet);
 
     void newStringData(QString);
 
 protected:
 
-    bool _running;
+    // Atomic because stop() writes it from the GUI thread while run() reads it in its
+    // loop on the worker thread; a plain bool there is a data race. Set true here rather
+    // than on entry to run(), so a stop() that lands in the window between start() and
+    // the thread actually running is not overwritten and lost. A worker is constructed,
+    // started once and destroyed (LiveMapsElementsWidget.cpp:196-199), never restarted,
+    // so there is no second run() that would need it reset.
+    std::atomic<bool> _running{true};
 
     std::unique_ptr<zmq::socket_t> _zmq_socket;
 
     std::unique_ptr<zmq::socket_t> _zmq_qserv_socket;
 
     io::net::Basic_Serializer<float> _serializer;
+
+    QString _error_message;
 
 };
 

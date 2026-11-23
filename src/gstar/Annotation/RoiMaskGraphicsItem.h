@@ -98,6 +98,16 @@ public:
 
    void setMaskSize(QRectF size);
 
+   /**
+    * Image pixels per measurement in the map this roi is drawn over. The mask itself always
+    * stays at data resolution - one pixel per measurement - so to_roi_vec() keeps returning
+    * exact data indices and roi membership stays strictly one measurement in or out. Only
+    * painting and incoming scene positions are scaled by this. See ImageViewWidget::renderScaleAt.
+    */
+   void setRenderScale(int scale);
+
+   int renderScale() const { return _render_scale; }
+
    void setBrushSize(QSize brushSize);
 
    void setDrawAction(DRAW_ACTION_MODES action_mode);
@@ -153,6 +163,8 @@ protected:
 
     QSize _brush_size;
 
+    int _render_scale;
+
     QPolygon _polygon;
 
     QPolygon _roi_polygon;
@@ -161,7 +173,10 @@ protected:
 
     bool _mouse_down;
 
-    RectItem _cursor;
+    // Child item, so Qt's parent/child ownership destroys it with this object.
+    // It must not be a by-value member: it is shown by parenting it into the
+    // scene, and QGraphicsScene deletes the items it holds.
+    RectItem* _cursor;
 };
 
 }

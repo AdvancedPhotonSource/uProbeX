@@ -14,9 +14,11 @@
 #include "RAW_Model.h"
 #include "VLM_Model.h"
 #include "io/file/hl_file_io.h"
+#include <future>
 #include <map>
 #include <memory>
 #include <QDir>
+#include <QTimer>
 
 //---------------------------------------------------------------------------
 
@@ -55,6 +57,8 @@ public:
     */
     ~MapsWorkspaceModel();
 
+    // Returns as soon as the directory scans have been handed to the thread pool.
+    // The doneLoading* signals report completion; nothing is loaded yet on return.
     void load(QString filepath);
 
     void unload();
@@ -86,6 +90,12 @@ public:
     data_struct::Fit_Element_Map_Dict<double>* getElementToFit(int idx);
 
     data_struct::Params_Override<double>* getParamOverride(int idx);
+
+    // Shares ownership. Callers that keep the override past the call - a
+    // MapsH5Model does - must use this and not the raw pointer above:
+    // load_fit_params() reassigns the dict entries, which drops the only
+    // owning reference if nobody else took one.
+    std::shared_ptr<data_struct::Params_Override<double>> getParamOverridePtr(int idx);
 
     const std::map<QString, QFileInfo>& get_hdf5_file_list() { return _h5_fileinfo_list; }
 
@@ -144,6 +154,15 @@ public slots:
     bool load_fit_params();
     
 protected:
+    // Timer driven, on the GUI thread: collects whichever load jobs have finished
+    // and stops the timer once they all have.
+    void _poll_load_jobs();
+
+    // Blocks until every outstanding load job has finished and stops the poll timer.
+    // The jobs write into members of this object, so nothing may clear those members
+    // or destroy the model until this has returned.
+    void _wait_for_load_jobs();
+
     void _roi_files_to_num();
 
     void _load_region_links(QString name, std::shared_ptr<MapsH5Model> model);
@@ -167,6 +186,12 @@ private:
 
     std::map<QString, QFileInfo> _h5_fileinfo_list;
     std::map<QString, QFileInfo> _raw_fileinfo_list;
+
+    // Scratch targets for the load() jobs that all feed _raw_fileinfo_list.
+    // Each pool thread writes only its own map; _poll_load_jobs() merges them in.
+    std::map<QString, QFileInfo> _raw_scan_fileinfo_scratch;
+    std::map<QString, QFileInfo> _mda_fileinfo_scratch;
+    std::map<QString, QFileInfo> _esrf_fileinfo_scratch;
     std::map<QString, QFileInfo> _vlm_fileinfo_list;
     std::map<QString, QFileInfo> _roi_fileinfo_list;
     std::map<QString, QFileInfo> _region_links_fileinfo_list;
@@ -174,6 +199,10 @@ private:
     std::map<QString, int> _roi_count_map;
 
     std::unique_ptr<QDir> _dir;
+
+    // The load jobs still in flight, and the timer that collects them.
+    std::map<int, std::future<bool>> _load_job_queue;
+    QTimer _load_poll_timer;
 
     bool _is_vlm_loaded;
     bool _is_raw_loaded;

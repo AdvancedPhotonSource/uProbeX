@@ -11,6 +11,7 @@
 #include <QIcon>
 #include <QGridLayout>
 #include "preferences/Preferences.h"
+#include "core/Hdf5Mutex.h"
 #include "core/str_defines.h"
 #include "mvc/SpectraWidgetSettingsDialog.h"
 
@@ -38,6 +39,7 @@ ImageSegRoiDialog::ImageSegRoiDialog() : QDialog()
 
 	onFirst = true;
 	_model = nullptr;
+	_selected_colormap = nullptr;
 
 	_color_map.insert({ 0, QColor(Qt::red) });
 	_color_map.insert({ 1, QColor(Qt::green) });
@@ -71,6 +73,25 @@ ImageSegRoiDialog::ImageSegRoiDialog() : QDialog()
 ImageSegRoiDialog::~ImageSegRoiDialog()
 {
 
+}
+
+//---------------------------------------------------------------------------
+
+QColor ImageSegRoiDialog::_color_at(int idx) const
+{
+	if (_color_map.empty())
+	{
+		return QColor(Qt::red);
+	}
+	const int size = static_cast<int>(_color_map.size());
+	// idx can arrive negative only through a programming error, but wrap defensively rather than
+	// hand std::map::at a key it does not have.
+	int wrapped = idx % size;
+	if (wrapped < 0)
+	{
+		wrapped += size;
+	}
+	return _color_map.at(wrapped);
 }
 
 //---------------------------------------------------------------------------
@@ -450,9 +471,14 @@ void ImageSegRoiDialog::setModel(std::shared_ptr<MapsH5Model> model)
 void ImageSegRoiDialog::_run_kmeans()
 {
 	ArrayXXr<float> int_img;
-	_get_img(int_img, _chk_normalize_sum->isChecked());
-	
-	cv::KmeansFlags flags;
+	if (false == _get_img(int_img, _chk_normalize_sum->isChecked()))
+	{
+		// Nothing checked: int_img is 0x0 and the cv::Mat below would wrap a null pointer.
+		QMessageBox::information(nullptr, "ImageSegROIDialog", "Select at least one image first.");
+		return;
+	}
+
+	cv::KmeansFlags flags = cv::KMEANS_RANDOM_CENTERS;
 	cv::TermCriteria crit;
 	if (_km_TermCriteria->currentIndex() == 0)
 	{
@@ -498,12 +524,7 @@ void ImageSegRoiDialog::_run_kmeans()
 
 	for (int i = 0; i < clusterCount; i++)
 	{
-		int color_idx = i;
-		if (color_idx > _color_map.size())
-		{
-			color_idx = color_idx % _color_map.size();
-		}
-		QColor color_data = _color_map[color_idx];
+		QColor color_data = _color_at(i);
 		_next_color++;
 		gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(new_labels, i, color_data);
 		_int_img_widget->addRoiMask(roi);
@@ -518,7 +539,10 @@ void ImageSegRoiDialog::_run_ratios()
 	{
 
 		ArrayXXr<float> int_img;
-		_get_img(int_img, _chk_normalize_sum->isChecked());
+		if (false == _get_img(int_img, _chk_normalize_sum->isChecked()))
+		{
+			throw std::invalid_argument("Select at least one image first.");
+		}
 		float perc = _rat_percent->text().toFloat();
 		logI<<" height :"<<int_img.rows()<< "pheight: " <<int_img.rows() * perc <<" width : "<<int_img.cols()<<" pwidth : "<<int_img.cols() * perc<<"\n";
 
@@ -589,12 +613,7 @@ void ImageSegRoiDialog::_run_ratios()
 		int totalROIs= max_idx +1;
 		for (int i = 0; i < totalROIs; i++)
 		{
-			int color_idx = i;
-			if (color_idx > _color_map.size())
-			{
-				color_idx = color_idx % _color_map.size();
-			}
-			QColor color_data = _color_map[color_idx];
+			QColor color_data = _color_at(i);
 			_next_color++;
 			gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(maskMat, i, color_data);
 			_int_img_widget->addRoiMask(roi);
@@ -680,6 +699,7 @@ void ImageSegRoiDialog::onPlot()
 			itr->to_roi_vec(pixel_list);
 			data_struct::Spectra<double> int_spectra;
 			std::unordered_map<std::string, double> scaler_sum_map;
+			hdf5::Lock hdf5_lock(hdf5::mutex());
 			if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, &int_spectra, scaler_sum_map))
 			{
 				if(ev.size() == 0)
@@ -773,7 +793,7 @@ void ImageSegRoiDialog::onClose()
 
 void ImageSegRoiDialog::onNewROI()
 {
-	QColor color_data = _color_map[_next_color];
+	QColor color_data = _color_at(_next_color);
 	ArrayXXr<float> int_img;
 	if (_get_img(int_img, _chk_normalize_sum->isChecked()))
 	{
@@ -870,6 +890,43 @@ void ImageSegRoiDialog::setColorMap(QVector<QRgb>* selected_colormap)
 
 bool ImageSegRoiDialog::_get_img(ArrayXXr<float> &int_img, bool normalize)
 {
+	Eigen::Index expected_rows = 0;
+	Eigen::Index expected_cols = 0;
+	bool found_image = false;
+
+	// Eigen's coefficient-wise addition requires identical dimensions, and its
+	// min/max reductions are invalid for empty arrays. Validate all selected inputs
+	// before touching the output so selection changes cannot terminate the process.
+	for (int i = 0; i < _img_list_model->rowCount(); i++)
+	{
+		QStandardItem* item0 = _img_list_model->item(i);
+		if (item0->checkState() == Qt::Checked && _img_data.count(item0->text()) > 0)
+		{
+			const ArrayXXr<float>& selected_img = _img_data.at(item0->text());
+			if (selected_img.rows() == 0 || selected_img.cols() == 0)
+			{
+				logW << "Cannot segment empty image " << item0->text().toStdString() << "\n";
+				return false;
+			}
+			if (false == found_image)
+			{
+				expected_rows = selected_img.rows();
+				expected_cols = selected_img.cols();
+				found_image = true;
+			}
+			else if (selected_img.rows() != expected_rows || selected_img.cols() != expected_cols)
+			{
+				logW << "Cannot combine segmentation images with different dimensions\n";
+				return false;
+			}
+		}
+	}
+
+	if (false == found_image)
+	{
+		return false;
+	}
+
 	bool first = true;
 
 	if (normalize)
@@ -897,7 +954,14 @@ bool ImageSegRoiDialog::_get_img(ArrayXXr<float> &int_img, bool normalize)
 				float localLow = norm_img.minCoeff();
 				float localDiff = norm_img.maxCoeff() - localLow;
 
-				norm_img = norm_img.unaryExpr([localLow, localDiff, highCoef](float v) { return ((v - localLow)/ (localDiff) ) * highCoef; });
+				if (localDiff > 0.f)
+				{
+					norm_img = norm_img.unaryExpr([localLow, localDiff, highCoef](float v) { return ((v - localLow) / localDiff) * highCoef; });
+				}
+				else
+				{
+					norm_img.setZero();
+				}
 
 				if (first)
 				{
@@ -1024,6 +1088,11 @@ void ImageSegRoiDialog::onImgSelection(QStandardItem* item)
 
 	if (is_checked)
 	{
+		if (_selected_colormap == nullptr)
+		{
+			logW << "No colormap set, call setColorMap() before showing this dialog.\n";
+			return;
+		}
 		_int_img_widget->setImageFromArray(int_img, *_selected_colormap, onFirst);
 		onFirst = false;
 	}
@@ -1064,6 +1133,10 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
         }
         data_struct::Fit_Element_Map_Dict<double> elements_to_model = po->elements_to_fit;
 		data_struct::Fit_Parameters<double> fit_params = po->fit_params;
+
+        // elements_to_model starts as a copy of po's dict; its entries are shared_ptrs, so the
+        // elements we add below are kept alive by the dict itself and po's entries are left
+        // untouched when the dict goes out of scope.
 
         if(fit_params.size() == 0)
         {
@@ -1114,9 +1187,9 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                         Element_Info<double>* eptr = Element_Info_Map<double>::inst()->get_element(itr.first);
                         if(eptr != nullptr)
                         {
-                            data_struct::Fit_Element_Map<double>* em = new data_struct::Fit_Element_Map<double>(itr.first, eptr);
+                            auto em = std::make_shared<data_struct::Fit_Element_Map<double>>(itr.first, eptr);
                             em->init_energy_ratio_for_detector_element(data_struct::Element_Info_Map<double>::inst()->get_element("Si")); // don't know how to look up
-                            elements_to_model[itr.first] = em;
+                            elements_to_model[itr.first] = std::move(em);
                         }
                         else
                         {
@@ -1163,13 +1236,6 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                     else
                     {
                         logW<<"Pixel out of range!\n";
-                        // clean up
-                        /*
-                        for(auto &em_itr : elements_to_model)
-                        {
-                            delete em_itr.second;
-                        }
-                          */  
                         return;
                     }
                 }
@@ -1199,7 +1265,9 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
                             energy_range.max);
 
                         spectra_background = spectra_background.unaryExpr([](double v) { return (v > 0.0) ? v : 0.0; });
-                        (ArrayDr)single_spec += spectra_background;
+                        // No cast: (ArrayDr)single_spec builds a temporary copy, so the
+                        // background was being added to something immediately discarded.
+                        single_spec += spectra_background;
                     }
                     else
                     {
@@ -1216,13 +1284,6 @@ void ImageSegRoiDialog::_model_custom_spectra(const std::string& analysis_name, 
 				_pb_pixels->setValue(i);
 				QCoreApplication::processEvents();
             }
-            // clean up
-            /*
-            for(auto &em_itr : elements_to_model)
-            {
-                delete em_itr.second;
-            }
-                */
 			_pb_pixels->setValue(pixel_list.size());
 			QCoreApplication::processEvents();
         }

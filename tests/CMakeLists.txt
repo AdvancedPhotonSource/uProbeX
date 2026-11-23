@@ -46,7 +46,6 @@ target_link_libraries(BlueskyCommTest
     GTest::gmock
     GTest::gmock_main
     Qt6::Core
-    cppzmq
     cppzmq-static
     pthread
 )

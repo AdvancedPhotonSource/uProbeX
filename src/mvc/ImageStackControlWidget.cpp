@@ -49,6 +49,29 @@ void ImageStackControlWidget::savePref()
 
 //---------------------------------------------------------------------------
 
+bool ImageStackControlWidget::openRoiDialog()
+{
+	if (_imageGrid == nullptr || _image_name_cb == nullptr)
+	{
+		return false;
+	}
+
+	auto model = _h5_model_map.find(_image_name_cb->currentText());
+	if (model == _h5_model_map.end() || model->second == nullptr)
+	{
+		return false;
+	}
+
+	_imageGrid->setModel(model->second);
+	_mda_widget->hide();
+	_vlm_widget->hide();
+	_imageGrid->show();
+	_imageGrid->openRoiDialog();
+	return true;
+}
+
+//---------------------------------------------------------------------------
+
 void ImageStackControlWidget::createLayout()
 {
     QVBoxLayout* vlayout = new QVBoxLayout();
@@ -246,13 +269,37 @@ void ImageStackControlWidget::onNextFilePressed()
 
 //---------------------------------------------------------------------------
 
+// Passing nullptr detaches this widget from the workspace model completely, and
+// callers rely on that: MapsWorkspaceController destroys the model right after,
+// so anything still pointing into it here would be left dangling. It has to drop
+// more than _model - _raw_model_map and _vlm_model_map are raw pointers the model
+// owns through unique_ptr, and _imageGrid/_mda_widget/_vlm_widget hold the same
+// pointers - which is the same detach onUnloadList_Model() already does per file.
 void ImageStackControlWidget::setModel(MapsWorkspaceModel *model)
 {
+	if (_model == model)
+	{
+		return;
+	}
+
 	if(_model != nullptr)
 	{
 		disconnect(_imageGrid, &MapsElementsWidget::fit_params_updated, _model, &MapsWorkspaceModel::load_fit_params);
 		disconnect(_mda_widget, &MDA_Widget::fit_params_updated, _model, &MapsWorkspaceModel::load_fit_params);
+
+		// Emptying the combo box re-enters model_IndexChanged(), which would look
+		// up a name in maps that are about to be cleared.
+		disconnect(_image_name_cb, &QComboBox::currentTextChanged, this, &ImageStackControlWidget::model_IndexChanged);
+		_imageGrid->setModel(nullptr);
+		_mda_widget->setModel(nullptr);
+		_vlm_widget->setModel(nullptr);
+		_h5_model_map.clear();
+		_raw_model_map.clear();
+		_vlm_model_map.clear();
+		_image_name_cb->clear();
+		connect(_image_name_cb, &QComboBox::currentTextChanged, this, &ImageStackControlWidget::model_IndexChanged);
 	}
+
 	_model = model;
 	_mapsFilsWidget->clearLists();
 	_mapsFilsWidget->setModel(_model);
@@ -314,7 +361,16 @@ void ImageStackControlWidget::onUnloadList_Model(const QStringList sl, MODEL_TYP
 {
 	disconnect(_image_name_cb, &QComboBox::currentTextChanged, this, &ImageStackControlWidget::model_IndexChanged);
 
+    // All three display widgets have to be detached, not just the H5 one.
+    // _raw_model_map and _vlm_model_map own their models through
+    // MapsWorkspaceModel, so the unload below really frees them, and
+    // model_IndexChanged() does nothing at all when the new current text
+    // matches no map - which is exactly the case after unloading the last
+    // dataset. _mda_widget and _vlm_widget were left pointing at freed
+    // models, reachable from any click in either widget.
     _imageGrid->setModel(nullptr);
+    _mda_widget->setModel(nullptr);
+    _vlm_widget->setModel(nullptr);
     foreach (QString s, sl)
     {
 		switch (mt)

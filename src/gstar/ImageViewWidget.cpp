@@ -36,6 +36,77 @@ ImageViewWidget::~ImageViewWidget()
 
 //---------------------------------------------------------------------------
 
+int ImageViewWidget::renderScaleAt(int grid_idx) const
+{
+    auto itr = _render_scales.find(grid_idx);
+    if(itr == _render_scales.end())
+    {
+        return 1;
+    }
+    return std::max(1, itr->second);
+}
+
+//---------------------------------------------------------------------------
+
+void ImageViewWidget::setRenderScaleAt(int grid_idx, int scale)
+{
+    _render_scales[grid_idx] = std::max(1, scale);
+}
+
+//---------------------------------------------------------------------------
+
+void ImageViewWidget::clearRenderScales()
+{
+    _render_scales.clear();
+}
+
+//---------------------------------------------------------------------------
+
+bool ImageViewWidget::pixelPosToDataIndex(const QPointF& pix_pos,
+                                          const QPixmap& pix,
+                                          int data_rows,
+                                          int data_cols,
+                                          int fallback_scale,
+                                          int& out_col,
+                                          int& out_row)
+{
+    if(pix.isNull())
+    {
+        return false;
+    }
+    if(pix_pos.x() < 0.0 || pix_pos.y() < 0.0)
+    {
+        return false;
+    }
+
+    int scale = std::max(1, fallback_scale);
+    // The colorbar strip is appended to the right of the map, so the pixmap height is still a
+    // whole number of measurement blocks and is the reliable place to recover the upscale from.
+    if(data_rows > 0 && pix.height() >= data_rows)
+    {
+        scale = std::max(1, (int)(pix.height() / data_rows));
+    }
+
+    int col = (int)(pix_pos.x()) / scale;
+    int row = (int)(pix_pos.y()) / scale;
+
+    // Past the last column means the cursor is on the colorbar strip, not on the scan.
+    if(data_cols > 0 && col >= data_cols)
+    {
+        return false;
+    }
+    if(data_rows > 0 && row >= data_rows)
+    {
+        return false;
+    }
+
+    out_col = col;
+    out_row = row;
+    return true;
+}
+
+//---------------------------------------------------------------------------
+
 void ImageViewWidget::setCoordsVisible(bool val)
 {
     m_coordWidget->setVisible(val, val, val);
@@ -45,6 +116,11 @@ void ImageViewWidget::setCoordsVisible(bool val)
 
 QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& colormap, GenerateImageProp &props)
 {
+    if(int_img.size() == 0)
+    {
+        return QImage();
+    }
+
     float counts_max = int_img.maxCoeff();
     float counts_min = int_img.minCoeff();
     if(props.contrast_limits == STR_FULL_IMAGE)
@@ -105,6 +181,14 @@ QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& co
                 counts_min = std::min(val, counts_min);
             }
         }
+
+        // Very small images can produce a zero-sized center region. Keep the
+        // full-image limits in that case instead of using the numeric sentinels.
+        if(counts_max < counts_min)
+        {
+            counts_max = int_img.maxCoeff();
+            counts_min = int_img.minCoeff();
+        }
     }
 
     int width = static_cast<unsigned int>(int_img.cols());
@@ -113,6 +197,7 @@ QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& co
     image.setColorTable(colormap);
 
     float max_min = counts_max - counts_min;
+    const bool flat = !(max_min > 0.0f);
     for (int row = 0; row < height; row++)
     {
         for (int col = 0; col < width; col++)
@@ -122,7 +207,11 @@ QImage ImageViewWidget::generate_img(ArrayXXr<float>& int_img, QVector<QRgb>& co
             cnts = std::min(counts_max, cnts);
             cnts = std::max(counts_min, cnts);
             //convert to pixel
-            unsigned char data = static_cast<unsigned char>(((cnts - counts_min) / max_min) * 255.0);
+            unsigned char data = 0;
+            if(false == flat)
+            {
+                data = static_cast<unsigned char>(((cnts - counts_min) / max_min) * 255.0f);
+            }
             image.setPixel(col, row, (uint)data);
         }
     }

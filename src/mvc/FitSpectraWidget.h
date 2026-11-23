@@ -72,7 +72,13 @@ public:
 
    void appendMaxChanSpectra(std::string name, std::shared_ptr<const ArrayDr> spec);
 
-   void appendROISpectra(std::string name, std::shared_ptr<ArrayDr> spec, QColor color);
+   // A roi carries two spectra. display_spec is what gets plotted - the elapsed
+   // live time normalized copy, so rois acquired for different dwell times are
+   // comparable on screen. fit_spec is what Fit ROI Spectra optimizes - the raw
+   // counts, because the fit and the quantification that follows it need real
+   // counts and the true live time off the Spectra. Pass null for fit_spec to
+   // use display_spec for both.
+   void appendROISpectra(std::string name, std::shared_ptr<ArrayDr> display_spec, std::shared_ptr<ArrayDr> fit_spec, QColor color);
 
    void deleteROISpectra(std::string name);
 
@@ -155,8 +161,9 @@ protected:
    // _elements_to_fit is a non-owning alias into whichever of the two is currently active.
    std::unique_ptr<data_struct::Fit_Element_Map_Dict<double>> _owned_elements_to_fit;
 
-   // Owns peaks added via add_custom_peak_pressed(); freed on removal in del_element() or on destruction.
-   std::vector<std::unique_ptr<data_struct::Fit_Element_Map<double>>> _custom_peaks;
+   // Peaks added via add_custom_peak_pressed(). Ownership is shared with the row the table
+   // model holds, so a peak lives until both this vector and that row have dropped it.
+   std::vector<std::shared_ptr<data_struct::Fit_Element_Map<double>>> _custom_peaks;
 
    //MapsH5Model* _h5_model;
 
@@ -239,7 +246,12 @@ private:
 
    std::unordered_map<std::string, std::shared_ptr<const ArrayDr>> _max_chan_spec_map;
 
+   // Plotted. Normalized by elapsed live time where the roi has such a copy.
    std::map<std::string, std::shared_ptr<ArrayDr>> _roi_spec_map;
+
+   // Fitted. Raw counts, keyed the same as _roi_spec_map and kept in step with
+   // it by every append/delete/clear below.
+   std::map<std::string, std::shared_ptr<ArrayDr>> _roi_fit_spec_map;
 
    std::unordered_map<std::string, QColor> _roi_spec_colors;
 

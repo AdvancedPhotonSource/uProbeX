@@ -121,7 +121,7 @@ public:
     */
    bool setHeaderData(int section, Qt::Orientation orientation, const QVariant &value, int role = Qt::EditRole) override;
 
-   void appendElement(data_struct::Fit_Element_Map<double>* element);
+   void appendElement(const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element);
 
 signals:
    void braching_ratio_changed(data_struct::Fit_Element_Map<double>* element);
@@ -148,7 +148,7 @@ private:
        {
        }
 
-       void set_root(data_struct::Fit_Element_Map<double>* element)
+       void set_root(const std::shared_ptr<data_struct::Fit_Element_Map<double>>& element)
        {
            element_data = element;
            parentItem = nullptr;
@@ -282,7 +282,9 @@ private:
            return true;
        }
 
-       data_struct::Fit_Element_Map<double>* element_data;
+       // Shared ownership: the element is also referenced by the Fit_Element_Map_Dict
+       // the table was populated from, which may be replaced or destroyed independently.
+       std::shared_ptr<data_struct::Fit_Element_Map<double>> element_data;
        std::vector<std::unique_ptr<TreeItem>> childItems;
        QVector<QVariant> itemData;
        TreeItem *parentItem;

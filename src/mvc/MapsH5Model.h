@@ -18,6 +18,7 @@
 #include <vector>
 #include <mutex>
 #include <memory>
+#include <cmath>
 #include "core/defines.h"
 #include <mvc/ExportMapsDialog.h>
 #include "io/file/hdf5_io.h"
@@ -62,12 +63,47 @@ struct Map_ROI
         pixel_list = pixel_list_;
         int_spec[filename] = int_spec_;
         scaler_sum_map = scaler_sum_map_;
+        normalize_int_spec_by_elt(filename);
     }
+
+    // Fills int_spec_normalized[filename] with int_spec[filename] divided by its elapsed live time.
+    // The live time has to come off the Spectra itself: the roi loader only reports US_IC, DS_IC and
+    // SR_Current in scaler_sum_map, never STR_ELT. Leaves int_spec_normalized without an entry for
+    // this file when there is no usable live time, so callers must fall back to int_spec.
+    void normalize_int_spec_by_elt(const std::string &filename)
+    {
+        auto itr = int_spec.find(filename);
+        if (itr == int_spec.end())
+        {
+            return;
+        }
+        double elt = itr->second.elapsed_livetime();
+        // data_struct::Spectra initializes _elapsed_livetime to default_time_and_io_counts (1e-9),
+        // so anything at or below that sentinel means "never set", not a real acquisition time.
+        // Treating it as real would scale every channel by 1e9.
+        if (false == std::isfinite(elt) || elt <= (double)default_time_and_io_counts)
+        {
+            logW << "Roi " << name << " has no usable elapsed live time (" << elt << "). Not normalizing integrated spectra.\n";
+            // Drop any previously normalized array so callers fall back to int_spec
+            // instead of being served a stale one derived from different data.
+            int_spec_normalized.erase(filename);
+            return;
+        }
+        data_struct::Spectra<double> normalized = itr->second;
+        normalized /= elt;
+        // The copy carries over the source metadata, so the live time has to be retired here.
+        // Anything that treats a Spectra as counts plus a live time (mca export, quantification)
+        // would otherwise divide by the acquisition time a second time.
+        normalized.elapsed_livetime(1.0);
+        int_spec_normalized[filename] = std::move(normalized);
+    }
+
     std::string name;
     std::vector<std::pair<int, int>> pixel_list;
     std::unordered_map<std::string, double> scaler_sum_map;
     // file name (usually detector)  and spectra
     std::map<std::string, data_struct::Spectra<double> > int_spec;
+    std::map<std::string, data_struct::Spectra<double> > int_spec_normalized;
     QColor color;
     int color_alpha;
 };
@@ -100,6 +136,14 @@ struct GenerateImageProp
     const data_struct::ArrayXXr<float>*  normalizer;
     const Calibration_curve<double>* calib_curve;
 };
+
+// How many image pixels gen_image() gives each measurement, so the baked colorbar labels have
+// enough resolution to be legible. One measurement becomes an N x N block of identical pixels -
+// the binning is untouched, there are just more pixels per bin - which means every conversion
+// from a scene/pixmap position back to a data index has to divide by this. Returns 1 when no
+// colorbar is drawn, so views that do not do that division are left at data resolution.
+// Callers must derive N from this one function rather than from the rendered image size.
+int map_render_scale(const GenerateImageProp& props, int data_rows);
 
 void gen_insert_order_list(std::vector<std::string> &all_lines);
 void gen_insert_order_lists(std::vector<std::string> &element_lines, std::vector<std::string> &scalers_to_add_first, std::vector<std::string>& final_counts_to_add_before_scalers);
@@ -190,7 +234,8 @@ public:
 
     void clearAllMapRois();
 
-    void appendMapRoi(std::string name, struct Map_ROI roi);
+    // Returns a reference to the stored roi so callers do not have to look it back up.
+    struct Map_ROI& appendMapRoi(const std::string& name, const struct Map_ROI& roi);
 
     void saveAllRoiMaps();
 

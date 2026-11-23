@@ -19,6 +19,7 @@
 #include <gstar/CountsLookupTransformer.h>
 #include <limits>
 #include "core/GlobalThreadPool.h"
+#include "core/Hdf5Mutex.h"
 #include "io/file/csv_io.h"
 #include "core/ColorMap.h"
 #include "io/file/mca_io.h"
@@ -37,6 +38,9 @@ struct ImageJobResult
 {
     QImage image;
     ArrayXXr<float> normalized;
+    // Image pixels per measurement in image. Computed on the worker because it needs the props
+    // the job was enqueued with, which are not kept past the enqueue on the gui side.
+    int render_scale = 1;
 };
 
 // Counts arrays are not guaranteed to agree with the axis dims, and roi pixel lists can come from
@@ -44,6 +48,43 @@ struct ImageJobResult
 static inline bool array_contains(const data_struct::ArrayXXr<float>& arr, int row, int col)
 {
     return row >= 0 && col >= 0 && row < (int)arr.rows() && col < (int)arr.cols();
+}
+
+// The spectra to plot for a roi: the elapsed live time normalized copy when the roi has one for
+// this dataset, otherwise the raw integrated spectra. Both live inside the model's Map_ROI storage,
+// so the returned shared_ptr is non owning and only valid while that roi is in the model. Returns
+// null when the roi has no spectra at all for this dataset.
+static std::shared_ptr<ArrayDr> non_owning_roi_spectra(const Map_ROI& roi, const std::string& dataset_name)
+{
+    auto norm_itr = roi.int_spec_normalized.find(dataset_name);
+    if (norm_itr != roi.int_spec_normalized.end())
+    {
+        return std::shared_ptr<ArrayDr>((ArrayDr*)&(norm_itr->second), [](ArrayDr*) {});
+    }
+    auto itr = roi.int_spec.find(dataset_name);
+    if (itr != roi.int_spec.end())
+    {
+        // No log here: normalize_int_spec_by_elt already warned once, at the point where the
+        // reason is known. This runs for every roi on every model_updated(), so warning again
+        // just buries that message.
+        return std::shared_ptr<ArrayDr>((ArrayDr*)&(itr->second), [](ArrayDr*) {});
+    }
+    return nullptr;
+}
+
+// The spectra to fit for a roi: always the raw integrated counts, never the normalized copy.
+// Rois are shown normalized so that different dwell times are comparable on screen, but the fit
+// and the quantification after it work in counts and read the acquisition time off the Spectra -
+// and the normalized copy deliberately carries a live time of 1.0. Non owning, same lifetime
+// rules as non_owning_roi_spectra above.
+static std::shared_ptr<ArrayDr> non_owning_roi_raw_spectra(const Map_ROI& roi, const std::string& dataset_name)
+{
+    auto itr = roi.int_spec.find(dataset_name);
+    if (itr != roi.int_spec.end())
+    {
+        return std::shared_ptr<ArrayDr>((ArrayDr*)&(itr->second), [](ArrayDr*) {});
+    }
+    return nullptr;
 }
 
 //---------------------------------------------------------------------------
@@ -55,6 +96,7 @@ MapsElementsWidget::MapsElementsWidget(int rows, int cols, bool compact_view, bo
     _model = nullptr;
     _normalizer = nullptr;
     _calib_curve = nullptr;
+    _restoring_view_labels = false;
 
     // Heat colormap stops: black -> red -> orange -> yellow -> white
     static const int heat_stops[][3] = {
@@ -169,30 +211,30 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
         _cb_colormap->addItem(itr.first);
     }
 
-    _color_map_ledgend_lbl = new QLabel();
-    _color_maps_ledgend = QImage(256, 10, QImage::Format_Indexed8);
-    _color_maps_ledgend.setColorTable(_gray_colormap);
+    _color_map_legend_lbl = new QLabel();
+    _color_maps_legend = QImage(256, 10, QImage::Format_Indexed8);
+    _color_maps_legend.setColorTable(_gray_colormap);
     for (uint c = 0; c < 256; c++)
     {
         for (int r = 0; r < 10; r++)
         {
-            _color_maps_ledgend.setPixel(c, r, c);
+            _color_maps_legend.setPixel(c, r, c);
         }
     }
 
-    _color_map_ledgend_lbl->setPixmap(QPixmap::fromImage(_color_maps_ledgend.convertToFormat(QImage::Format_RGB32)));
+    _color_map_legend_lbl->setPixmap(QPixmap::fromImage(_color_maps_legend.convertToFormat(QImage::Format_RGB32)));
 
-    _chk_disp_color_ledgend = new QCheckBox("Display Color Ledgend");
-    _chk_disp_color_ledgend->setChecked(Preferences::inst()->getValue(STR_DISPLAY_COLOR_LEDGEND).toBool());
-    connect(_chk_disp_color_ledgend, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_log_color_changed);
+    _chk_disp_color_legend = new QCheckBox("Display Color Legend");
+    _chk_disp_color_legend->setChecked(Preferences::inst()->getValue(STR_DISPLAY_COLOR_LEGEND).toBool());
+    connect(_chk_disp_color_legend, &QCheckBox::stateChanged, this, &MapsElementsWidget::on_log_color_changed);
 
     QWidget* color_maps_widgets = new QWidget();
     QHBoxLayout* colormapsHBox = new QHBoxLayout();
     colormapsHBox->setContentsMargins(0, 0, 0, 0);
     colormapsHBox->addWidget(new QLabel(" ColorMap :"));
     colormapsHBox->addWidget(_cb_colormap);
-    colormapsHBox->addWidget(_color_map_ledgend_lbl);
-    colormapsHBox->addWidget(_chk_disp_color_ledgend);
+    colormapsHBox->addWidget(_color_map_legend_lbl);
+    colormapsHBox->addWidget(_chk_disp_color_legend);
     color_maps_widgets->setLayout(colormapsHBox);
 
     _chk_log_color = new QCheckBox("Log scale");
@@ -444,7 +486,7 @@ void MapsElementsWidget::_createLayout(bool create_image_nav, bool restore_float
     restoreGeometry(Preferences::inst()->getValue(STR_MAPS_WIDGET_GEOMETRY).toByteArray());
     //restoreState(Preferences::inst()->getValue(STR_MAPS_WIDGET_WINDOWSTATE).toByteArray());
 
-    setCoordinateModel(new gstar::CoordinateModel(&_motor_trans));
+    setCoordinateModel(new gstar::CoordinateModel(&_motor_trans, false));
 
     hbox->setSpacing(0);
 	hbox->setContentsMargins(0, 0, 0, 0);
@@ -500,6 +542,64 @@ void MapsElementsWidget::savePref()
 
 //---------------------------------------------------------------------------
 
+void MapsElementsWidget::_save_grid_selection()
+{
+    // The compact view has one combobox for the whole grid and already saves its ordered list
+    // under STR_PFR_SELECTED_ELEMENTS, so there is no per-view selection to record here.
+    if (_restoring_view_labels || isCompactView())
+    {
+        return;
+    }
+
+    QStringList itemList;
+    for (const QString& itr : m_imageViewWidget->getLabelList())
+    {
+        itemList.append(itr);
+    }
+
+    // A grid of empty comboboxes means no dataset is loaded. Writing that out would wipe the
+    // selection the user is about to come back to.
+    bool any_set = false;
+    for (const QString& itr : itemList)
+    {
+        if (itr.length() > 0)
+        {
+            any_set = true;
+            break;
+        }
+    }
+    if (false == any_set)
+    {
+        return;
+    }
+
+    // Keep whatever was saved for views beyond the current grid size. Shrinking to a 1x1, picking
+    // a map and going back to 3x3 would otherwise lose the other eight selections, since only the
+    // one visible view can report itself here.
+    const QStringList prev = Preferences::inst()->getValue(STR_PFR_GRID_SELECTED_ELEMENTS).toStringList();
+    for (int i = itemList.size(); i < prev.size(); i++)
+    {
+        itemList.append(prev.at(i));
+    }
+
+    Preferences::inst()->setValue(STR_PFR_GRID_SELECTED_ELEMENTS, itemList);
+    Preferences::inst()->save();
+}
+
+//---------------------------------------------------------------------------
+
+std::vector<QString> MapsElementsWidget::_load_grid_selection() const
+{
+    std::vector<QString> saved;
+    for (const QString& itr : Preferences::inst()->getValue(STR_PFR_GRID_SELECTED_ELEMENTS).toStringList())
+    {
+        saved.push_back(itr);
+    }
+    return saved;
+}
+
+//---------------------------------------------------------------------------
+
 void MapsElementsWidget::_appendRoiTab()
 {   
     m_roiTreeModel = std::make_unique<gstar::AnnotationTreeModel>();
@@ -529,7 +629,7 @@ void MapsElementsWidget::_appendRoiTab()
 
     QVBoxLayout* roiVbox = new QVBoxLayout();
     _btn_roi_img_seg = new QPushButton("ROI Dialog");
-    connect(_btn_roi_img_seg, &QPushButton::released, this, &MapsElementsWidget::openImageSegDialog);
+    connect(_btn_roi_img_seg, &QPushButton::released, this, &MapsElementsWidget::openRoiDialog);
 
     _btn_roi_stats = new QPushButton("ROI Statistics");
     connect(_btn_roi_stats, &QPushButton::released, this, &MapsElementsWidget::openRoiStatsWidget);
@@ -646,7 +746,7 @@ void MapsElementsWidget::onGridDialog()
 void MapsElementsWidget::on_log_color_changed(int state)
 {
     Preferences::inst()->setValue(STR_LOG_SCALE_COLOR, _chk_log_color->isChecked());
-    Preferences::inst()->setValue(STR_DISPLAY_COLOR_LEDGEND, _chk_disp_color_ledgend->isChecked());
+    Preferences::inst()->setValue(STR_DISPLAY_COLOR_LEGEND, _chk_disp_color_legend->isChecked());
     redrawCounts();
 }
 
@@ -707,12 +807,29 @@ void MapsElementsWidget::openImageSegDialog()
         }
         for (auto itr : roi_list)
         {
-            _img_seg_diag.append_roi((gstar::RoiMaskGraphicsItem*)(itr->duplicate()));
+            gstar::RoiMaskGraphicsItem* copy = (gstar::RoiMaskGraphicsItem*)(itr->duplicate());
+            // The dialog draws its maps at one pixel per measurement, unlike this widget, so the
+            // copy goes back to painting the mask at its own size.
+            copy->setRenderScale(1);
+            _img_seg_diag.append_roi(copy);
         }
         _spectra_widget->deleteAllROISpectra();
 
         _img_seg_diag.show();
     }
+}
+
+//---------------------------------------------------------------------------
+
+void MapsElementsWidget::openRoiDialog()
+{
+    if (_model == nullptr)
+    {
+        return;
+    }
+
+    m_tabWidget->setCurrentIndex(ROI_TAB);
+    openImageSegDialog();
 }
 
 //---------------------------------------------------------------------------
@@ -929,6 +1046,9 @@ void MapsElementsWidget::onElementSelect(QString name, int viewIdx)
 
     if (_model != nullptr && _model->regionLinks().count(name) > 0)
     {
+        // Not produced by gen_image, so it never got the render upscale. Without this the scale
+        // from whatever map was in this slot before would still be applied to it.
+        m_imageViewWidget->setRenderScaleAt(viewIdx, 1);
         m_imageViewWidget->setSubScenePixmap(viewIdx, QPixmap::fromImage((_model->regionLinks().at(name))));
     }
     else
@@ -939,6 +1059,10 @@ void MapsElementsWidget::onElementSelect(QString name, int viewIdx)
             displayCounts(analysisName.toStdString(), name.toStdString(), _chk_log_color->isChecked(), viewIdx);
         }
     }
+
+    // Only reached for a real combobox change once the grid is built, so this is the user
+    // picking a map for a view. Record it so the layout comes back on the next run.
+    _save_grid_selection();
 }
 
 //---------------------------------------------------------------------------
@@ -958,7 +1082,7 @@ void MapsElementsWidget::checkColormapSelect(QString colormap)
     else
     {
         _selected_colormap = ColorMap::inst()->get_color_map(colormap);
-        // The ledgend and the count images are indexed 8 bit, so anything that does not cover all
+        // The legend and the count images are indexed 8 bit, so anything that does not cover all
         // 256 indices would be read past the end of when converting to rgb.
         if (_selected_colormap == nullptr || _selected_colormap->size() != 256)
         {
@@ -971,8 +1095,8 @@ void MapsElementsWidget::checkColormapSelect(QString colormap)
             Preferences::inst()->setValue(STR_COLORMAP, colormap);
         }
     }
-    _color_maps_ledgend.setColorTable(*_selected_colormap);
-    _color_map_ledgend_lbl->setPixmap(QPixmap::fromImage(_color_maps_ledgend.convertToFormat(QImage::Format_RGB32)));
+    _color_maps_legend.setColorTable(*_selected_colormap);
+    _color_map_legend_lbl->setPixmap(QPixmap::fromImage(_color_maps_legend.convertToFormat(QImage::Format_RGB32)));
 }
 
 //---------------------------------------------------------------------------
@@ -1306,12 +1430,19 @@ void MapsElementsWidget::on_export_fit_params(data_struct::Fit_Parameters<double
 
 void MapsElementsWidget::model_updated()
 {
+    // Everything below tears down and rebuilds the view comboboxes, which emits
+    // currentTextChanged for each of them as it goes. onElementSelect() must not write a half
+    // built grid back over the saved selection while that happens, so the flag covers the whole
+    // rebuild, including the clearLabels() inside _clear_model_bindings().
+    _restoring_view_labels = true;
+
     // Runs before the early return below on purpose, the previous dataset has to be released
     // whether or not there is a new one to show.
     _clear_model_bindings();
 
     if(_model == nullptr)
     {
+        _restoring_view_labels = false;
         return;
     }
 
@@ -1391,8 +1522,28 @@ void MapsElementsWidget::model_updated()
     data_struct::Fit_Count_Dict<float> element_counts;
     _model->getAnalyzedCounts(current_a, element_counts);
 
-    const std::vector<QString> element_view_list = m_imageViewWidget->getLabelList();
-    
+    std::vector<QString> element_view_list = m_imageViewWidget->getLabelList();
+
+    if (false == isCompactView())
+    {
+        // Nothing is on screen to carry over: either this is the first dataset since startup or
+        // the grid was just rebuilt by onNewGridLayout(). Seed from the saved per-view selection
+        // so the user's layout comes back instead of the first n maps in the dataset.
+        bool any_on_screen = false;
+        for (const QString& itr : element_view_list)
+        {
+            if (itr.length() > 0)
+            {
+                any_on_screen = true;
+                break;
+            }
+        }
+        if (false == any_on_screen)
+        {
+            element_view_list = _load_grid_selection();
+        }
+    }
+
     // get copy of elements to add the ones that were missed, usually pileups
     data_struct::Fit_Count_Dict<float> element_counts_not_added;
     _model->getAnalyzedCounts(current_a, element_counts_not_added);
@@ -1488,6 +1639,10 @@ void MapsElementsWidget::model_updated()
             m_imageViewWidget->addLabel(val);
         }
     }
+
+    // Grid is fully built now, so changes from here on are the user's and worth saving.
+    _restoring_view_labels = false;
+
     m_imageWidgetToolBar->clickFill();
 
 
@@ -1573,16 +1728,12 @@ void MapsElementsWidget::model_updated()
     for (auto& itr : _model->get_map_rois())
     {
         
-        QRectF scene_dims = m_imageViewWidget->getSceneRect();
-        int width = (int)scene_dims.width();
-        int height = (int)scene_dims.height();
-        // Nothing has been drawn for this dataset yet, so the scene can still be empty. Falling
-        // back keeps the mask from coming out 0x0, which would silently drop every roi pixel.
-        if (width < 1 || height < 1)
-        {
-            width = (int)_model->get_x_axis().cols();
-            height = (int)_model->get_y_axis().rows();
-        }
+        // pixel_list holds data indices, so the mask is sized in measurements, not in scene
+        // pixels - the scene is both upscaled by the render scale and widened by the colorbar.
+        int width = (int)_model->get_x_axis().cols();
+        int height = (int)_model->get_y_axis().rows();
+        // No axes on this dataset. Falling back keeps the mask from coming out 0x0, which would
+        // silently drop every roi pixel.
         if (width < 1 || height < 1)
         {
             for (const auto& p_itr : itr.second.pixel_list)
@@ -1591,15 +1742,23 @@ void MapsElementsWidget::model_updated()
                 height = std::max(height, p_itr.second + 1);
             }
         }
+        if (width < 1 || height < 1)
+        {
+            QRectF scene_dims = m_imageViewWidget->getSceneRect();
+            int scale = std::max(1, m_imageViewWidget->renderScaleAt(0));
+            width = (int)scene_dims.width() / scale;
+            height = (int)scene_dims.height() / scale;
+        }
         logI<< "Loading roi: "<< itr.first<<"\n";
         gstar::RoiMaskGraphicsItem* roi = new gstar::RoiMaskGraphicsItem(QString(itr.first.c_str()), itr.second.color, itr.second.color_alpha, width, height, itr.second.pixel_list);
+        roi->setRenderScale(m_imageViewWidget->renderScaleAt(0));
         insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, roi);
-        if (itr.second.int_spec.count(_model->getDatasetName().toStdString()) > 0)
+        // plot roi int spec
+        const std::string roi_dataset_name = _model->getDatasetName().toStdString();
+        std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(itr.second, roi_dataset_name);
+        if (roi_spec != nullptr)
         {
-            // plot roi int spec
-            // non-owning: this Spectra lives inside _model's Map_ROI storage, not on our heap
-            ArrayDr* model_owned_spec = (ArrayDr*)&(itr.second.int_spec.at(_model->getDatasetName().toStdString()));
-            _spectra_widget->appendROISpectra(itr.first, std::shared_ptr<ArrayDr>(model_owned_spec, [](ArrayDr*) {}), itr.second.color);
+            _spectra_widget->appendROISpectra(itr.first, roi_spec, non_owning_roi_raw_spectra(itr.second, roi_dataset_name), itr.second.color);
         }
     }
 
@@ -1615,7 +1774,25 @@ void MapsElementsWidget::model_updated()
     _quant_widget->setModel(_model);
 
     _motor_trans.setMotors(_model->get_x_axis(), _model->get_y_axis());
-    
+    {
+        // A dataset can carry axes that are empty, degenerate, or all zero. The transformer then
+        // has nothing to look up and the readout can only print 0 for both motors, which on screen
+        // is indistinguishable from a broken pixel-to-motor mapping. Say which one it is.
+        const ArrayXXr<float>& xa = _model->get_x_axis();
+        const ArrayXXr<float>& ya = _model->get_y_axis();
+        if(xa.size() < 1 || ya.size() < 1)
+        {
+            logW << "Dataset " << _model->getDatasetName().toStdString()
+                 << " has no x_axis/y_axis; mouse-over motor positions will read 0.\n";
+        }
+        else if(ya.rows() < 2)
+        {
+            logW << "Dataset " << _model->getDatasetName().toStdString() << " y_axis is "
+                 << ya.rows() << "x" << ya.cols()
+                 << "; mouse-over motor Y is looked up by row and cannot vary.\n";
+        }
+    }
+
     annoTabChanged(m_tabWidget->currentIndex());
 
     redrawCounts();
@@ -1677,6 +1854,8 @@ void MapsElementsWidget::redrawCounts()
                 }
                 if (_model->regionLinks().count(element) > 0)
                 {
+                    // Not produced by gen_image, so it never got the render upscale.
+                    m_imageViewWidget->setRenderScaleAt(vidx, 1);
                     m_imageViewWidget->setSubScenePixmap(vidx, QPixmap::fromImage((_model->regionLinks().at(element))));
                 }
                 else
@@ -1689,6 +1868,7 @@ void MapsElementsWidget::redrawCounts()
                         {
                             ImageJobResult job;
                             job.image = model->gen_image(props, job.normalized);
+                            job.render_scale = map_render_scale(props, (int)job.normalized.rows());
                             return job;
                         });
                 }
@@ -1701,6 +1881,7 @@ void MapsElementsWidget::redrawCounts()
                 {
                     m_imageViewWidget->setCountsTrasnformAt(itr.first, job.normalized);
                 }
+                m_imageViewWidget->setRenderScaleAt(itr.first, job.render_scale);
                 m_imageViewWidget->setSubScenePixmap(itr.first, QPixmap::fromImage(job.image));
             }
         }
@@ -1810,7 +1991,7 @@ GenerateImageProp MapsElementsWidget::generate_image_props(const std::string ana
     props.normalizer = _normalizer;
     props.calib_curve = _calib_curve;
     props.contrast_limits = _contrast_widget->get_contrast_limits();
-    props.show_legend = _chk_disp_color_ledgend->isChecked();
+    props.show_legend = _chk_disp_color_legend->isChecked();
     props.invert_y = _chk_invert_y->isChecked();
     props.global_contrast = _contrast_widget->is_global_contrast_checked();
     if (props.global_contrast)
@@ -1841,6 +2022,7 @@ void MapsElementsWidget::displayCounts(const std::string analysis_type, const st
         GenerateImageProp props = generate_image_props(analysis_type, element, log_color, grid_idx);
         
         QPixmap p = _model->gen_pixmap(props, normalized);
+        m_imageViewWidget->setRenderScaleAt(grid_idx, map_render_scale(props, (int)normalized.rows()));
         m_imageViewWidget->setSubScenePixmap(grid_idx, p);
         if(normalized.rows() > 0 && normalized.cols() > 0)
         {
@@ -1873,6 +2055,7 @@ QPixmap MapsElementsWidget::generate_pixmap(const std::string analysis_type, con
         ArrayXXr<float> normalized;
         GenerateImageProp props = generate_image_props(analysis_type, element, log_color, grid_idx);
         QPixmap pm = _model->gen_pixmap(props, normalized);
+        m_imageViewWidget->setRenderScaleAt(grid_idx, map_render_scale(props, (int)normalized.rows()));
         if(normalized.rows() > 0 && normalized.cols() > 0)
         {
             m_imageViewWidget->setCountsTrasnformAt(grid_idx, normalized);
@@ -1909,17 +2092,35 @@ void MapsElementsWidget::on_add_new_ROIs(std::vector<gstar::RoiMaskGraphicsItem*
 
         for (auto& itr : roi_list)
         {
-            insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, itr->duplicate());
+            // The copy is drawn over this widget's maps, which are upscaled; the original came
+            // from a view that is not. Only the painting changes - the mask stays one pixel per
+            // measurement, so to_roi_vec below still yields data indices.
+            gstar::AbstractGraphicsItem* copy = itr->duplicate();
+            gstar::RoiMaskGraphicsItem* roi_copy = dynamic_cast<gstar::RoiMaskGraphicsItem*>(copy);
+            if (roi_copy != nullptr)
+            {
+                roi_copy->setRenderScale(m_imageViewWidget->renderScaleAt(0));
+            }
+            insertAndSelectAnnotation(m_roiTreeModel.get(), m_roiTreeView, m_roiSelectionModel, copy);
             std::vector<std::pair<int, int>> pixel_list;
             itr->to_roi_vec(pixel_list);
-            auto int_spectra = std::make_shared<data_struct::Spectra<double>>();
+            data_struct::Spectra<double> int_spectra;
             std::unordered_map<std::string, double> scaler_maps;
-            if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, int_spectra.get(), scaler_maps))
+            hdf5::Lock hdf5_lock(hdf5::mutex());
+            if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(_model->getFilePath().toStdString(), pixel_list, &int_spectra, scaler_maps))
             {
-                struct Map_ROI roi(itr->getName().toStdString(), itr->getColor(), itr->alphaValue(), pixel_list, _model->getDatasetName().toStdString(), *int_spectra, scaler_maps);
+                std::string roi_f_name = _model->getDatasetName().toStdString();
+                std::string roi_name = itr->getName().toStdString();
+                struct Map_ROI roi(roi_name, itr->getColor(), itr->alphaValue(), pixel_list, roi_f_name, int_spectra, scaler_maps);
 
-                _model->appendMapRoi(itr->getName().toStdString(), roi);
-                _spectra_widget->appendROISpectra(itr->getName().toStdString(), int_spectra, itr->getColor());
+                // plot the elapsed live time normalized spectra off the copy the model now owns,
+                // the local roi above goes out of scope at the end of this iteration
+                const Map_ROI& model_roi = _model->appendMapRoi(roi_name, roi);
+                std::shared_ptr<ArrayDr> roi_spec = non_owning_roi_spectra(model_roi, roi_f_name);
+                if (roi_spec != nullptr)
+                {
+                    _spectra_widget->appendROISpectra(roi_name, roi_spec, non_owning_roi_raw_spectra(model_roi, roi_f_name), itr->getColor());
+                }
 
                 /*
                  // duplicate , need to normalize to a function
@@ -2420,8 +2621,8 @@ void MapsElementsWidget::on_export_images()
 
                     out_stream << "\n";
                     // check if there are any ROI's and export them
-                    const std::unordered_map<std::string, Map_ROI> rois = _model->get_map_rois();
-                    for (auto itr_roi : rois)
+                    const std::unordered_map<std::string, Map_ROI>& rois = _model->get_map_rois();
+                    for (const auto& itr_roi : rois)
                     {
                         out_stream << "ROI: "<<itr_roi.first<<"\n";
                         for (auto& p_itr : itr_roi.second.pixel_list)

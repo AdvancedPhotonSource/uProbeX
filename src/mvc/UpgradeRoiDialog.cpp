@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QDesktopServices>
 #include <QDir>
+#include "core/Hdf5Mutex.h"
 #include "io/file/mca_io.h"
 
 //---------------------------------------------------------------------------
@@ -313,6 +314,7 @@ bool UpgradeRoiDialog::_load_v9_rois(QString fname, MapsH5Model* model, QString 
                             std::unordered_map<std::string, double> scaler_sum_map;
                             QString hdf_file_path = _directory.absolutePath() + QDir::separator() + "img.dat" + QDir::separator() + itr.first;
 
+                            hdf5::Lock hdf5_lock(hdf5::mutex());
                             if (io::file::HDF5_IO::inst()->load_integrated_spectra_analyzed_h5_roi(hdf_file_path.toStdString(), roi_itr.second, &int_spectra, scaler_sum_map))
                             {
                                 //                                        color,   alpha

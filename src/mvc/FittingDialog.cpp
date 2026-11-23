@@ -384,27 +384,27 @@ void FittingDialog::runProcessing()
         {
             if(_custom_background)
             {
-                _hybrid_fit_routine.initialize(&_model, _elements_to_fit, _energy_range, &_spectra_background);
+                _hybrid_fit_routine.initialize(_model, _elements_to_fit, _energy_range, &_spectra_background);
             }
             else
             {
-                _hybrid_fit_routine.initialize(&_model, _elements_to_fit, _energy_range, nullptr);
+                _hybrid_fit_routine.initialize(_model, _elements_to_fit, _energy_range, nullptr);
             }
         }
         else
         {
             if(_custom_background)
             {
-                _param_fit_routine.initialize(&_model, _elements_to_fit, _energy_range, &_spectra_background);
+                _param_fit_routine.initialize(_model, _elements_to_fit, _energy_range, &_spectra_background);
             }
             else
             {
-                _param_fit_routine.initialize(&_model, _elements_to_fit, _energy_range, nullptr);
+                _param_fit_routine.initialize(_model, _elements_to_fit, _energy_range, nullptr);
             }
         }
         //Fit the spectra saving the element counts in element_fit_count_dict
         // single threaded
-        //out_fit_params = fit_routine.fit_spectra_parameters(&_model, int_spectra, _elements_to_fit);
+        //out_fit_params = fit_routine.fit_spectra_parameters(_model, int_spectra, _elements_to_fit);
 
         // use background thread to not freeze up the gui
         Callback_Func_Status_Def cb_func = std::bind(&FittingDialog::status_callback, this, std::placeholders::_1, std::placeholders::_2);
@@ -412,11 +412,11 @@ void FittingDialog::runProcessing()
         {
             if (_optimizer_widget->isHybrid())
             {
-                _outcome = _hybrid_fit_routine.fit_spectra_parameters(&_model, &_int_spec, _elements_to_fit, use_weights, _new_out_fit_params, &cb_func);
+                _outcome = _hybrid_fit_routine.fit_spectra_parameters(_model, &_int_spec, _elements_to_fit, use_weights, _new_out_fit_params, &cb_func);
             }
             else
             {
-                _outcome = _param_fit_routine.fit_spectra_parameters(&_model, &_int_spec, _elements_to_fit, use_weights, _new_out_fit_params, &cb_func);
+                _outcome = _param_fit_routine.fit_spectra_parameters(_model, &_int_spec, _elements_to_fit, use_weights, _new_out_fit_params, &cb_func);
             }
             
             std::string out_str = optimizer_outcome_to_str(_outcome);

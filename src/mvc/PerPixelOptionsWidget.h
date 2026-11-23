@@ -24,6 +24,7 @@
 #include <QLineEdit>
 #include <QGroupBox>
 #include <QMessageBox>
+#include <atomic>
 #include <memory>
 #include <data_struct/analysis_job.h>
 
@@ -49,12 +50,21 @@ public:
 
     void updateFileList(QStringList file_list);
 
+    // Called by the fitting code on the worker thread, not on the GUI thread.
+    // It must not touch a widget; it only reads the cancel flag and posts a
+    // progress update across to the GUI thread.
     void status_callback(size_t cur_block, size_t total_blocks);
 
     void setRunning();
 
     void setStoped();
-    
+
+    // Asks a running fit to stop at its next status callback. Safe to call from
+    // any thread.
+    void cancel() { _canceled = true; }
+
+    bool isCanceled() const { return _canceled.load(); }
+
     bool performQuantificationChecked() { return _perform_quantification->isChecked();  }
 
     QStringList fileList() { return _file_list;}
@@ -189,8 +199,16 @@ signals:
 
     void onStop();
 
+    // Emitted from the fitting thread; delivered to onStatusUpdate() as a queued
+    // event so the progress bars are only ever touched on the GUI thread.
+    // qulonglong rather than size_t because a queued connection needs a type Qt
+    // has a metatype for, and size_t is not one of them.
+    void statusUpdate(qulonglong cur_block, qulonglong total_blocks);
+
 protected slots:
     void onCancel();
+
+    void onStatusUpdate(qulonglong cur_block, qulonglong total_blocks);
 
 protected:
 
@@ -199,7 +217,8 @@ protected:
     */
    void createLayout();
 
-   bool _canceled;
+   // Written by the GUI thread, read by the fitting thread.
+   std::atomic<bool> _canceled;
 
    size_t _total_file_range;
 

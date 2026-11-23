@@ -104,6 +104,13 @@ bool PythonSolver::initialPythonSolver(QString path,
 bool PythonSolver::run()
 {
 
+   if(m_func == nullptr)
+   {
+      this->m_lastErrorMsg = "Python solver function was never loaded";
+      logE<<"Python solver function was never loaded\n";
+      return false;
+   }
+
    try
    {
       pybind11::dict result = (*m_func)(
@@ -117,6 +124,27 @@ bool PythonSolver::run()
    {
       this->m_lastErrorMsg = ex.what();
       logE<<ex.what();
+      return false;
+   }
+   catch(const std::exception& ex)
+   {
+      // pybind11::cast_error derives from std::runtime_error, not error_already_set, so
+      // it was caught nowhere in this codebase. .cast<pybind11::dict>() above throws it
+      // whenever my_solver returns anything that is not a dict - None from an early
+      // return, a list, a tuple - and PythonLoader::toQMapDouble() throws it again per
+      // entry for any value that is not a number. run() is reached from
+      // VLM_Widget::openSolver(), a slot, so the throw unwound into the Qt event loop
+      // and called std::terminate.
+      this->m_lastErrorMsg = ex.what();
+      logE<<ex.what();
+      return false;
+   }
+   catch(...)
+   {
+      // Nothing may escape into the event loop, whatever pybind11 or a future edit
+      // decides to throw.
+      this->m_lastErrorMsg = "Unknown error running the python solver";
+      logE<<"Unknown error running the python solver\n";
       return false;
    }
 

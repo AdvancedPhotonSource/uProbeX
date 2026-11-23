@@ -149,6 +149,14 @@ protected slots:
 
    virtual void subwindow_redraw(SubImageWindow*);
 
+protected:
+
+   /**
+    * Map a position inside grid cell cell_idx's pixmap to a data row/column, undoing the render
+    * upscale gen_image applied. False when the position is off the map, e.g. over the colorbar.
+    */
+   bool cellPosToDataIndex(int cell_idx, const QPointF& local_pos, int& out_col, int& out_row);
+
 private slots:
 
    /**

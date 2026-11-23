@@ -5,6 +5,7 @@
 
 #include <mvc/QuantificationWidget.h>
 #include "data_struct/element_info.h"
+#include <QSignalBlocker>
 
 //---------------------------------------------------------------------------
 
@@ -111,36 +112,71 @@ void QuantificationWidget::_createLayout()
 
 void QuantificationWidget::setModel(std::shared_ptr<MapsH5Model> model)
 {
-    if (_model != model)
+    if (_model == model)
     {
-        _model = model;
-        if (_model != nullptr)
-        {
-            std::vector<std::string> analysis_types = _model->getAnalyzedTypes();
-            _cb_analysis_types->clear();
-            for (auto& itr : analysis_types)
-            {
-                _cb_analysis_types->addItem(itr.c_str());
-            }
-            QString first_an = "";
-            if (analysis_types.size() > 0)
-            {
-                first_an = analysis_types.front().c_str();
-            }
-
-            QStringList quant_scalers = _model->get_calibration_curve_scalers(first_an.toStdString());
-            _cb_scalers->clear();
-            _cb_scalers->addItems(quant_scalers);
-            QString not_used = "";
-            update(not_used);
-        }
+        return;
     }
+
+    _model = model;
+
+    // Block both combos while they are rebuilt. Every clear() and addItem()
+    // emits currentTextChanged, which is wired straight to update(), so a
+    // dataset load rebuilt the whole chart once per analysis type and once
+    // per scaler - and the emissions during the analysis rebuild paired a new
+    // analysis type with the previous dataset's scaler. The single wanted
+    // update() is at the end of this function.
+    const QSignalBlocker block_analysis(_cb_analysis_types);
+    const QSignalBlocker block_scalers(_cb_scalers);
+
+    _cb_analysis_types->clear();
+    _cb_scalers->clear();
+
+    if (_model == nullptr)
+    {
+        // Nothing to plot, and the combos must not be left holding the
+        // unloaded dataset's entries: update() dereferences _model, so one
+        // click on a stale entry after an unload would crash.
+        _calib_curve = nullptr;
+        _calib_curve_series_k->clear();
+        _calib_curve_series_l->clear();
+        _calib_curve_series_m->clear();
+        foreach(QScatterSeries * sitr, _scatter_list)
+        {
+            sitr->detachAxis(_axisX);
+            sitr->detachAxis(_currentYAxis);
+            _chart->removeSeries(sitr);
+            delete sitr;
+        }
+        _scatter_list.clear();
+        return;
+    }
+
+    std::vector<std::string> analysis_types = _model->getAnalyzedTypes();
+    for (auto& itr : analysis_types)
+    {
+        _cb_analysis_types->addItem(itr.c_str());
+    }
+    QString first_an = "";
+    if (analysis_types.size() > 0)
+    {
+        first_an = analysis_types.front().c_str();
+    }
+
+    QStringList quant_scalers = _model->get_calibration_curve_scalers(first_an.toStdString());
+    _cb_scalers->addItems(quant_scalers);
+    QString not_used = "";
+    update(not_used);
 }
 
 //---------------------------------------------------------------------------
 
 void QuantificationWidget::update(const QString& val)
 {
+    if (_model == nullptr)
+    {
+        return;
+    }
+
     double max_val = -9999.0;
     double min_val = 9999.0;
     _calib_curve = _model->get_calibration_curve(_cb_analysis_types->currentText().toStdString(), _cb_scalers->currentText().toStdString());

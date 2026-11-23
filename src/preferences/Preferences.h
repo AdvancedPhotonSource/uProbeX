@@ -106,7 +106,7 @@
 #define STR_COLORMAP_HEAT "Heatmap"
 #define STR_RECENT_MAPS_WORKSPACES "Recent_MAPS_Workspaces"
 #define STR_LOG_SCALE_COLOR "Color_Scale_Log"
-#define STR_DISPLAY_COLOR_LEDGEND "Display_Color_Ledgend"
+#define STR_DISPLAY_COLOR_LEGEND "Display_Color_Legend"
 #define STR_INVERT_Y_AXIS "Invert_Y_Axis"
 #define STR_PFR_THEME "Theme"
 #define STR_PFR_SPECTRA_BLACK_BG "SPECTRA_BLACK_BG"
@@ -143,9 +143,12 @@
 #define STR_PFR_USE_OPENGL "Use_OpenGL"
 #define STR_PRF_COMPACT_COUNTS_VIEW "Counts_Compact_View"
 #define STR_PFR_SELECTED_ELEMENTS "Selected_Elements"
+// Which map each cell of the n x m counts grid is showing, one entry per view in view order.
+// Separate from STR_PFR_SELECTED_ELEMENTS, which is the compact view's single ordered list.
+#define STR_PFR_GRID_SELECTED_ELEMENTS "Grid_Selected_Elements"
 #define STR_PREF_SAVED_CONTRAST "Saved_Contrast"
 #define STR_PRF_ScaleBarVisible "ScaleBarVisible"
-
+#define STR_PFR_SHOW_ELEMENT_RATIOS "ShowElementRatios"
 
 /**
  * @brief Read and save preferences between application restarts, the vaule key

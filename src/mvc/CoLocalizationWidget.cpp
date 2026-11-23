@@ -4,6 +4,7 @@
  *---------------------------------------------------------------------------*/
 
 #include <mvc/CoLocalizationWidget.h>
+#include <QSignalBlocker>
 
 
 constexpr unsigned int RED_WINDOW = 0;
@@ -11,7 +12,7 @@ constexpr unsigned int BLUE_WINDOW = 1;
 constexpr unsigned int GREEN_WINDOW = 2;
 //---------------------------------------------------------------------------
 
-CoLocalizationWidget::CoLocalizationWidget(QWidget* parent) : gstar::AbstractImageWidget(1, 1, parent)
+CoLocalizationWidget::CoLocalizationWidget(QWidget* parent) : gstar::AbstractImageWidget(1, 1, false, parent)
 {
     _model = nullptr;
     _firstRed = true;
@@ -175,6 +176,13 @@ void CoLocalizationWidget::onBlueColorSelected(QString name)
 
 void CoLocalizationWidget::displayCounts(bool update_Min_MAx)
 {
+    // gen_pixmap() below is called on _model whenever _fit_counts has the
+    // selected name. _fit_counts outlives the model, so without this a
+    // channel selection after an unload dereferences null.
+    if (_model == nullptr)
+    {
+        return;
+    }
 
     QImage red_img;
     QImage green_img;
@@ -396,6 +404,17 @@ void CoLocalizationWidget::onSetAnalysisType(QString name)
     QString saved_green = _cb_green_element->currentText();
     QString saved_blue = _cb_blue_element->currentText();
 
+    // Block the combo boxes while they are rebuilt. Every clear(), addItem()
+    // and setCurrentText() below emits currentTextChanged, and each of those
+    // runs on{Red,Green,Blue}ColorSelected -> displayCounts(), so switching
+    // analysis type redrew all three channel images once per emission - with
+    // _fit_counts still holding the previous analysis type's data for the
+    // emissions that happen before it is replaced. The blockers stay in scope
+    // for the rest of the function; one redraw is issued at the end.
+    const QSignalBlocker block_red(_cb_red_element);
+    const QSignalBlocker block_green(_cb_green_element);
+    const QSignalBlocker block_blue(_cb_blue_element);
+
     _cb_red_element->clear();
     _cb_green_element->clear();
     _cb_blue_element->clear();
@@ -484,20 +503,49 @@ void CoLocalizationWidget::onSetAnalysisType(QString name)
         _cb_blue_element->setCurrentText(saved_blue);
     }
 
+    // The single redraw the blocked selections above would otherwise have
+    // triggered. Same first-selection bookkeeping as the three slots.
+    displayCounts(_firstRed || _firstGreen || _firstBlue);
+    if (false == _contrast_widget->is_global_contrast_checked())
+    {
+        _firstRed = false;
+        _firstGreen = false;
+        _firstBlue = false;
+    }
 }
 
 //---------------------------------------------------------------------------
 
 void CoLocalizationWidget::setModel(std::shared_ptr<MapsH5Model> model)
 {
-    if (_model != model)
+    if (_model == model)
     {
-        _model = model;
-        //model_updated();
-        if (_model != nullptr)
-        {
-            onSetAnalysisType(_curAnalysis);
-        }
+        return;
+    }
+
+    _model = model;
+    //model_updated();
+    if (_model != nullptr)
+    {
+        onSetAnalysisType(_curAnalysis);
+    }
+    else
+    {
+        // The dataset is gone. Drop its counts and empty the combos so no
+        // stale channel name is left for the user to click on.
+        _fit_counts.clear();
+
+        const QSignalBlocker block_red(_cb_red_element);
+        const QSignalBlocker block_green(_cb_green_element);
+        const QSignalBlocker block_blue(_cb_blue_element);
+
+        _cb_red_element->clear();
+        _cb_green_element->clear();
+        _cb_blue_element->clear();
+
+        _cb_red_element->addItem(QString(" "));
+        _cb_green_element->addItem(QString(" "));
+        _cb_blue_element->addItem(QString(" "));
     }
 }
 

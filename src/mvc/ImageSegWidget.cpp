@@ -9,11 +9,12 @@
 //---------------------------------------------------------------------------
 
 ImageSegWidget::ImageSegWidget(QWidget* parent)
-: AbstractImageWidget(1,1,parent)
+: AbstractImageWidget(1,1,false,parent)
 {
     _draw_action_mode = gstar::DRAW_ACTION_MODES::OFF;
     _selected_roi = nullptr;
     _mouse_down = false;
+    _first_pixmap_set = true;
     _roi_brush_size = QSize(1, 1);
 
     createLayout();
@@ -26,7 +27,6 @@ ImageSegWidget::ImageSegWidget(QWidget* parent)
 
 ImageSegWidget::~ImageSegWidget()
 {
-    _first_pixmap_set = true;
 }
 
 //---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ void ImageSegWidget::windowChanged(Qt::WindowStates oldState,
 
    Q_UNUSED(oldState);
 
-   if(Qt::WindowMaximized || Qt::WindowActive == newState)
+   if(newState & (Qt::WindowMaximized | Qt::WindowActive))
    {
       m_imageViewWidget->resizeEvent(nullptr);
    }

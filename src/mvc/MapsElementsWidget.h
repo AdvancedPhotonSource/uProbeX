@@ -96,6 +96,9 @@ public slots:
 
    void openImageSegDialog();
 
+   /** Select the ROI tab and open the ROI image-segmentation dialog. */
+   void openRoiDialog();
+
    void convertRoiToMca();
 
    void openRoiStatsWidget();
@@ -159,6 +162,22 @@ protected:
     */
    void _clear_model_bindings();
 
+   /**
+    * @brief Persist which map each grid view is showing so the layout survives a restart.
+    * Does nothing while _restoring_view_labels is set: rebuilding the comboboxes emits
+    * currentTextChanged for every view, and saving from inside that would overwrite the
+    * preference with a half built grid.
+    */
+   void _save_grid_selection();
+
+   /**
+    * @brief The per-view selection written by _save_grid_selection(), empty if there is none.
+    */
+   std::vector<QString> _load_grid_selection() const;
+
+   /// Set while model_updated() is tearing down and rebuilding the view comboboxes.
+   bool _restoring_view_labels;
+
    std::shared_ptr<MapsH5Model> _model;
 
    FitSpectraWidget* _spectra_widget;
@@ -208,7 +227,7 @@ protected:
 
    QCheckBox* _chk_log_color;
 
-   QCheckBox* _chk_disp_color_ledgend;
+   QCheckBox* _chk_disp_color_legend;
 
    QCheckBox* _chk_invert_y;
 
@@ -218,9 +237,9 @@ protected:
 
    QWidget* _counts_window;
 
-   QImage _color_maps_ledgend;
+   QImage _color_maps_legend;
 
-   QLabel *_color_map_ledgend_lbl;
+   QLabel *_color_map_legend_lbl;
 
    QuantificationWidget* _quant_widget;
 

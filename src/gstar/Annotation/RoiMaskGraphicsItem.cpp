@@ -158,9 +158,16 @@ RoiMaskGraphicsItem::~RoiMaskGraphicsItem()
 
 void RoiMaskGraphicsItem::_init(QColor color, int alpha)
 {
-    _cursor.setWidth(10.);
-    _cursor.setHeight(10.);
-    _cursor.setColor(Qt::gray);
+    // Parented to this item rather than added to the scene directly, so it
+    // comes and goes with its owner and is deleted exactly once.
+    _cursor = new RectItem(0.0, 0.0, 10.0, 10.0, this);
+    _cursor->setColor(Qt::gray);
+    // It is a brush cursor, not something the user can grab. Leaving it
+    // selectable also put a non-AbstractGraphicsItem into selectedItems(),
+    // which ImageViewScene::sceneSelectionChanged() casts without checking.
+    _cursor->setFlag(QGraphicsItem::ItemIsMovable, false);
+    _cursor->setFlag(QGraphicsItem::ItemIsSelectable, false);
+    _cursor->setVisible(false);
 
     setFlags(ItemIsSelectable);
     setAcceptHoverEvents(true);
@@ -174,6 +181,7 @@ void RoiMaskGraphicsItem::_init(QColor color, int alpha)
     _mouse_down = false;
     _draw_action = DRAW_ACTION_MODES::OFF;
     _brush_size = QSize(10, 10);
+    _render_scale = 1;
 
     _color_ano = new AnnotationProperty();
     _color_ano->setName("Color");
@@ -212,12 +220,13 @@ void RoiMaskGraphicsItem::setMaskSize(QRectF size)
 
 void RoiMaskGraphicsItem::add_to_roi(QPointF pos)
 {
-    int x = pos.x();
-    int y = pos.y();
+    // Scene position in image pixels -> the measurement under it.
+    int x = (int)pos.x() / _render_scale;
+    int y = (int)pos.y() / _render_scale;
 
-    if (x > -1 && x <= _mask->width())
+    if (x > -1 && x < _mask->width())
     {
-        if (y > -1 && y <= _mask->height())
+        if (y > -1 && y < _mask->height())
         {
             int xsize = x + _brush_size.width();
             if (xsize > _mask->width())
@@ -235,7 +244,8 @@ void RoiMaskGraphicsItem::add_to_roi(QPointF pos)
                     _mask->setPixelColor(i, j, col);
                 }
             }
-            QRect rect(x, y, _brush_size.width(), _brush_size.height());
+            // update() takes item coordinates, which are image pixels.
+            QRect rect(x * _render_scale, y * _render_scale, _brush_size.width() * _render_scale, _brush_size.height() * _render_scale);
             update(rect);
         }
     }
@@ -252,14 +262,16 @@ void RoiMaskGraphicsItem::add_to_roi(QPolygon polygon)
     {
         for (int j = 0; j < _mask->height(); j++)
         {
-            QPoint point(i, j);
+            // The polygon was drawn in scene coordinates, so test the center of the block of
+            // pixels this measurement occupies rather than the measurement index itself.
+            QPoint point((i * _render_scale) + (_render_scale / 2), (j * _render_scale) + (_render_scale / 2));
             if( polygon.containsPoint(point, Qt::OddEvenFill) )
             {
                 _mask->setPixelColor(i, j, col);
             }
         }
     }
-    QRect rect(0, 0, _mask->width(), _mask->height());
+    QRect rect(0, 0, _mask->width() * _render_scale, _mask->height() * _render_scale);
     update(rect);
 }
 
@@ -294,11 +306,12 @@ void RoiMaskGraphicsItem::invertMask()
 void RoiMaskGraphicsItem::erase_from_roi(QPointF pos)
 {
 
-    int x = pos.x();
-    int y = pos.y();
-    if (x > -1 && x <= _mask->width())
+    // Scene position in image pixels -> the measurement under it.
+    int x = (int)pos.x() / _render_scale;
+    int y = (int)pos.y() / _render_scale;
+    if (x > -1 && x < _mask->width())
     {
-        if (y > -1 && y <= _mask->height())
+        if (y > -1 && y < _mask->height())
         {
             int xsize = x + _brush_size.width();
             if (xsize > _mask->width())
@@ -313,7 +326,8 @@ void RoiMaskGraphicsItem::erase_from_roi(QPointF pos)
                     _mask->setPixelColor(i, j, QColor(0, 0, 0, 0));
                 }
             }
-            QRect rect(x, y, _brush_size.width(), _brush_size.height());
+            // update() takes item coordinates, which are image pixels.
+            QRect rect(x * _render_scale, y * _render_scale, _brush_size.width() * _render_scale, _brush_size.height() * _render_scale);
             update(rect);
         }
     }
@@ -327,14 +341,15 @@ void RoiMaskGraphicsItem::erase_from_roi(QPolygon polygon)
     {
         for (int j = 0; j < _mask->height(); j++)
         {
-            QPoint point(i, j);
+            // Scene coordinate polygon, so test the center of this measurement's pixel block.
+            QPoint point((i * _render_scale) + (_render_scale / 2), (j * _render_scale) + (_render_scale / 2));
             if (polygon.containsPoint(point, Qt::OddEvenFill))
             {
                 _mask->setPixelColor(i, j, QColor(0, 0, 0, 0));
             }
         }
     }
-    QRect rect(0, 0, _mask->width(), _mask->height());
+    QRect rect(0, 0, _mask->width() * _render_scale, _mask->height() * _render_scale);
     update(rect);
 }
 
@@ -437,7 +452,23 @@ void RoiMaskGraphicsItem::to_roi_vec(std::vector<std::pair<int, int>>& rois)
 QRectF RoiMaskGraphicsItem::boundingRect() const
 {
 
-   return _mask->rect();
+   return QRectF(0, 0, _mask->width() * _render_scale, _mask->height() * _render_scale);
+
+}
+
+//-----------------------------------------------------------------------------
+
+void RoiMaskGraphicsItem::setRenderScale(int scale)
+{
+
+   scale = std::max(1, scale);
+   if(scale == _render_scale)
+   {
+      return;
+   }
+   prepareGeometryChange();
+   _render_scale = scale;
+   update();
 
 }
 
@@ -446,7 +477,7 @@ QRectF RoiMaskGraphicsItem::boundingRect() const
 QRectF RoiMaskGraphicsItem::boundingRectMarker() const
 {
 
-   return _mask->rect();
+   return QRectF(0, 0, _mask->width() * _render_scale, _mask->height() * _render_scale);
 
 }
 
@@ -464,6 +495,7 @@ AbstractGraphicsItem* RoiMaskGraphicsItem::duplicate()
     QColor col = QColor(_color_ano->getValue().toString());
     RoiMaskGraphicsItem* item = new RoiMaskGraphicsItem(*_mask, col, _alpha_value->getValue().toInt());
     item->prependProperty(new AnnotationProperty(DEF_STR_DISPLAY_NAME, getName()));
+    item->setRenderScale(_render_scale);
     return item;
 
 }
@@ -484,7 +516,11 @@ void RoiMaskGraphicsItem::paint(QPainter* painter,
     {
         setPos(0, 0); //uncomment for fix single window offset bug
     }
-    painter->drawPixmap(0, 0, QPixmap::fromImage(*_mask));
+    // The mask is one pixel per measurement; stretch it over the map's render scale. Smoothing
+    // off so a roi pixel lines up exactly with the block of pixels its measurement occupies.
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
+    painter->drawPixmap(QRect(0, 0, _mask->width() * _render_scale, _mask->height() * _render_scale), QPixmap::fromImage(*_mask));
+    // _roi_polygon is collected in scene coordinates, so it is already in this item's units.
     if (_roi_polygon.size() > 0)
     {
         QPainterPath path;
@@ -586,8 +622,9 @@ void RoiMaskGraphicsItem::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
         }
         */
     }
-   _cursor.setPos(spos);
-   //_cursor.setPos(event->scenePos());
+   // spos is in scene coordinates; _cursor is a child of this item, so it is
+   // positioned in this item's coordinates.
+   _cursor->setPos(mapFromScene(spos));
    QGraphicsItem::mouseMoveEvent(event);
 }
 
@@ -606,8 +643,7 @@ void RoiMaskGraphicsItem::onMouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 
 void RoiMaskGraphicsItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event)
 {
-    //_cursor.setPos(event->scenePos());
-    this->scene()->addItem(&_cursor);
+    _cursor->setVisible(true);
     update(boundingRect());
 }
 
@@ -615,7 +651,7 @@ void RoiMaskGraphicsItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event)
 
 void RoiMaskGraphicsItem::hoverLeaveEvent(QGraphicsSceneHoverEvent* event)
 {
-    this->scene()->removeItem(&_cursor);
+    _cursor->setVisible(false);
     update(boundingRect());
 }
 
@@ -634,8 +670,8 @@ void RoiMaskGraphicsItem::setBrushSize(QSize brushSize)
     _brush_size = brushSize;
     double w = (double)(brushSize.width());
     double h = (double)(brushSize.height());
-    _cursor.setWidth(w); 
-    _cursor.setHeight(h);
+    _cursor->setWidth(w);
+    _cursor->setHeight(h);
 }
 
 //-----------------------------------------------------------------------------

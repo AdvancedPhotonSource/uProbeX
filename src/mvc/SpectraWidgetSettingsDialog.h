@@ -67,6 +67,8 @@ protected:
 
    QCheckBox* _chkSpec_Blk_Bg;
 
+   QCheckBox* _chkSpec_show_element_ratios;
+
    //QTextEdit *_textEdit;
 
    QPushButton *_btn_run;

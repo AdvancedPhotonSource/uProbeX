@@ -75,8 +75,9 @@ FitSpectraWidget::FitSpectraWidget(QWidget* parent) : QWidget(parent)
 
     createLayout();
 
-    _spectra_background.resize(10);
-    _spectra_background.Zero(10);
+    // setZero, not Zero: Zero() is a static factory, so "_spectra_background.Zero(10)"
+    // built a temporary and threw it away, leaving the resized array uninitialized.
+    _spectra_background.setZero(10);
     connect(this, &FitSpectraWidget::signal_finished_fit, this, &FitSpectraWidget::finished_fitting);
 
 
@@ -337,12 +338,22 @@ void FitSpectraWidget::update_selected_element_to_add(QString val)
 
 void FitSpectraWidget::setParamOverride(data_struct::Params_Override<double>* po)
 {
-	_param_override = po; 
+	_param_override = po;
 	if (_param_override != nullptr)
 	{
 		setElementDetector(_param_override->detector_element);
 		setElementsToFit(&(_param_override->elements_to_fit));
 		setFitParams(&(_param_override->fit_params));
+	}
+	else
+	{
+		// _elements_to_fit aliases _param_override->elements_to_fit. Clearing
+		// only _param_override left it pointing into the object that was just
+		// taken away, and "Add Element" writes through it:
+		// (*_elements_to_fit)[name] = fit_element. The null check on the
+		// delete path cannot catch that - the pointer is not null, it is
+		// dangling.
+		setElementsToFit(nullptr);
 	}
 }
 
@@ -352,7 +363,8 @@ void FitSpectraWidget::on_braching_ratio_update(data_struct::Fit_Element_Map<dou
 {
     if (element != nullptr)
     {
-        _spectra_widget->set_element_lines(element);
+        double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+        _spectra_widget->set_element_lines(element, incident_energy);
     }
 }
 
@@ -445,6 +457,23 @@ void FitSpectraWidget::onSettingsDialog()
             for (auto& itr : _max_chan_spec_map)
             {
                 _spectra_widget->remove_spectra(QString(itr.first.c_str()));
+            }
+        }
+
+        // redraw the element lines for the currently selected element, if any
+        QModelIndex current_idx = _fit_elements_table->selectionModel()->currentIndex();
+        if (current_idx.isValid())
+        {
+            data_struct::Fit_Element_Map<double>* out_element = nullptr;
+            QString out_name;
+            bool is_parent = false;
+            if (_fit_elements_table_model->getElementByIndex(current_idx, &out_element, out_name, is_parent))
+            {
+                if (out_element != nullptr)
+                {
+                    double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+                    _spectra_widget->set_element_lines(out_element, incident_energy);
+                }
             }
         }
     }
@@ -589,9 +618,57 @@ void FitSpectraWidget::on_export_fit_paramters()
 
 //---------------------------------------------------------------------------
 
+// save_fit_and_int_spectra_labeled() loops energy->size() times and indexes every other
+// array it is handed without checking that they agree in length, so anything shorter than
+// _ev is read off the end of its buffer. Two members are routinely shorter: _fit_spec is
+// 2048 until a fit has run, and _spectra_background is 10 until a snip background has been
+// computed, while _ev is sized from the dataset's channel count. Hand the writer a padded
+// copy instead of the member whenever it is too short.
+// _labeled_spectras is exposed the same way and is never cleared, so it also goes stale:
+// fit a 2048 channel dataset, switch to a 4096 channel one and export without re-fitting,
+// and the detailed lines are read 2048 elements past their end.
+static ArrayDr* padded_to(ArrayDr& src, Eigen::Index n, ArrayDr& scratch)
+{
+    if (src.size() >= n)
+    {
+        return &src;
+    }
+    scratch.setZero(n);
+    scratch.head(src.size()) = src;
+    return &scratch;
+}
+
 void FitSpectraWidget::on_export_csv()
 {
-    emit export_csv_and_png(_spectra_widget->getPngofChart(), &_ev, _int_spec, &_spectra_background, &_fit_spec, &_labeled_spectras);
+    // The receivers consume these pointers synchronously inside the emit (both connections
+    // are direct), so the scratch arrays below outlive every use.
+    const Eigen::Index n = _ev.size();
+    ArrayDr back_scratch;
+    ArrayDr fit_scratch;
+    ArrayDr* back = padded_to(_spectra_background, n, back_scratch);
+    ArrayDr* fit = padded_to(_fit_spec, n, fit_scratch);
+
+    std::unordered_map<std::string, ArrayDr> labeled_scratch;
+    std::unordered_map<std::string, ArrayDr>* labeled = &_labeled_spectras;
+    for (const auto& itr : _labeled_spectras)
+    {
+        if (itr.second.size() < n)
+        {
+            labeled = &labeled_scratch;
+            break;
+        }
+    }
+    if (labeled == &labeled_scratch)
+    {
+        for (const auto& itr : _labeled_spectras)
+        {
+            ArrayDr& dst = labeled_scratch[itr.first];
+            dst.setZero(n);
+            dst.head(std::min<Eigen::Index>(itr.second.size(), n)) = itr.second.head(std::min<Eigen::Index>(itr.second.size(), n));
+        }
+    }
+
+    emit export_csv_and_png(_spectra_widget->getPngofChart(), &_ev, _int_spec, back, fit, labeled);
 }
 
 //---------------------------------------------------------------------------
@@ -727,9 +804,14 @@ void FitSpectraWidget::appendMaxChanSpectra(std::string name, std::shared_ptr<co
 
 //---------------------------------------------------------------------------
 
-void FitSpectraWidget::appendROISpectra(std::string name, std::shared_ptr<ArrayDr> spec, QColor color)
+void FitSpectraWidget::appendROISpectra(std::string name, std::shared_ptr<ArrayDr> display_spec, std::shared_ptr<ArrayDr> fit_spec, QColor color)
 {
-    _roi_spec_map[name] = spec;
+    _roi_spec_map[name] = display_spec;
+    // Fit the raw counts. The displayed copy is divided by elapsed live time
+    // and has its own live time reset to 1.0, so fitting it would optimize
+    // against count rates and then let quantification divide by a live time
+    // that is no longer the acquisition time.
+    _roi_fit_spec_map[name] = (fit_spec != nullptr) ? fit_spec : display_spec;
     _roi_spec_colors[name] = color;
 }
 
@@ -739,12 +821,11 @@ void FitSpectraWidget::deleteROISpectra(std::string name)
 {
     if (_roi_spec_map.count(name) > 0)
     {
-        auto spec = _roi_spec_map.at(name);
-        if (spec != nullptr)
-        {
-            spec->resize(1);
-        }
+        // Do not resize/clear the array: these pointers are non-owning aliases into the
+        // model's Map_ROI storage, so touching the data here destroys the model's spectra.
         _roi_spec_map.erase(name);
+        _roi_fit_spec_map.erase(name);
+        _roi_spec_colors.erase(name);
         _spectra_widget->remove_spectra(QString(name.c_str()));
     }
     replot_integrated_spectra(false);
@@ -754,16 +835,15 @@ void FitSpectraWidget::deleteROISpectra(std::string name)
 
 void FitSpectraWidget::deleteAllROISpectra()
 {
+    // Do not resize/clear the arrays: these pointers are non-owning aliases into the
+    // model's Map_ROI storage, so touching the data here destroys the model's spectra.
     for (auto &itr : _roi_spec_map)
     {
-        auto spec = itr.second;
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
-        if (spec != nullptr)
-        {
-            spec->resize(1);
-        }
     }
     _roi_spec_map.clear();
+    _roi_fit_spec_map.clear();
+    _roi_spec_colors.clear();
     replot_integrated_spectra(false);
 }
 
@@ -800,6 +880,8 @@ void FitSpectraWidget::clearROISpectra()
         _spectra_widget->remove_spectra(QString(itr.first.c_str()));
     }
     _roi_spec_map.clear();
+    _roi_fit_spec_map.clear();
+    _roi_spec_colors.clear();
 }
 
 //---------------------------------------------------------------------------
@@ -842,7 +924,7 @@ void FitSpectraWidget::add_element()
         }
     }
 	
-    data_struct::Fit_Element_Map<double>* fit_element = gen_element_map<double>(el_name.toStdString());
+    std::shared_ptr<data_struct::Fit_Element_Map<double>> fit_element = gen_element_map<double>(el_name.toStdString());
     if(fit_element != nullptr)
     {
 		if (_param_override != nullptr)
@@ -896,29 +978,23 @@ void FitSpectraWidget::del_element()
 
             if( fit_element != nullptr )
             {
-                bool freed = false;
-                if( _elements_to_fit != nullptr && _elements_to_fit->find(fit_element->full_name()) != _elements_to_fit->end() )
+                // Copy the name out first: full_name() returns a reference into the element,
+                // which erase() may destroy while still using the key.
+                const std::string el_full_name = fit_element->full_name();
+                // Drop our references to the element; the shared_ptr held by the
+                // table model row goes away with removeRows() below.
+                if( _elements_to_fit != nullptr )
                 {
-                    Fit_Element_Map<double>* el = (*_elements_to_fit)[fit_element->full_name()];
-                    _elements_to_fit->erase(fit_element->full_name());
-                    if(el != nullptr)
-                    {
-                        delete el;
-                        freed = true;
-                    }
+                    _elements_to_fit->erase(el_full_name);
                 }
-                if(!freed)
+                auto it = std::find_if(_custom_peaks.begin(), _custom_peaks.end(),
+                    [fit_element](const std::shared_ptr<data_struct::Fit_Element_Map<double>>& p) { return p.get() == fit_element; });
+                if(it != _custom_peaks.end())
                 {
-                    // not in _elements_to_fit -- may be a custom peak we own directly
-                    auto it = std::find_if(_custom_peaks.begin(), _custom_peaks.end(),
-                        [fit_element](const std::unique_ptr<data_struct::Fit_Element_Map<double>>& p) { return p.get() == fit_element; });
-                    if(it != _custom_peaks.end())
-                    {
-                        _custom_peaks.erase(it);
-                    }
+                    _custom_peaks.erase(it);
                 }
             }
-			_spectra_widget->set_element_lines(nullptr);
+			_spectra_widget->set_element_lines(nullptr, 0);
             auto p = i.parent();
             if(false == p.isValid())
             {	
@@ -947,8 +1023,8 @@ void FitSpectraWidget::add_custom_peak_pressed()
     {
         QString name = _custon_peak_dialog.get_name();
         double center = _custon_peak_dialog.get_energy();
-        auto fit_element = std::make_unique<data_struct::Fit_Element_Map<double>>(name.toStdString(), center, 1.0);
-        _fit_elements_table_model->appendElement(fit_element.get());
+        auto fit_element = std::make_shared<data_struct::Fit_Element_Map<double>>(name.toStdString(), center, 1.0);
+        _fit_elements_table_model->appendElement(fit_element);
         _custom_peaks.push_back(std::move(fit_element));
     }
 }
@@ -1103,9 +1179,13 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
 
     roi_name = roiDialog.selectedROI();
     
-    if (_roi_spec_map.count(roi_name.toStdString()) > 0)
+    // _roi_fit_spec_map, not _roi_spec_map: fit the raw counts, not the live
+    // time normalized copy that is on screen. The arrays underneath are
+    // Spectra<double>, so the cast to Spectra below also recovers the real
+    // elapsed live time, which the normalized copy has set to 1.0.
+    if (_roi_fit_spec_map.count(roi_name.toStdString()) > 0)
     {
-        roi_spec = _roi_spec_map.at(roi_name.toStdString()).get();
+        roi_spec = _roi_fit_spec_map.at(roi_name.toStdString()).get();
     }
     else
     {
@@ -1118,9 +1198,11 @@ void FitSpectraWidget::Fit_ROI_Spectra_Click()
 
     if(back_name != "SNIP Algorithm")
     {
-        if (_roi_spec_map.count(back_name.toStdString()) > 0)
+        // Same map as the roi above: a background subtracted from raw counts
+        // has to be raw counts.
+        if (_roi_fit_spec_map.count(back_name.toStdString()) > 0)
         {
-            back_spec = _roi_spec_map.at(back_name.toStdString()).get();
+            back_spec = _roi_fit_spec_map.at(back_name.toStdString()).get();
         }
         else
         {
@@ -1306,7 +1388,8 @@ void FitSpectraWidget::element_selection_changed_from(QModelIndex current, QMode
     {
         if(is_parent)
         {
-            _spectra_widget->set_element_lines(out_element);
+            double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+            _spectra_widget->set_element_lines(out_element, incident_energy);
         }
         else // is element line, show ROI width instead 
         {
@@ -1350,7 +1433,8 @@ void FitSpectraWidget::element_selection_changed(int index)
     }
 
     em.init_energy_ratio_for_detector_element(data_struct::Element_Info_Map<double>::inst()->get_element(_detector_element));
-    _spectra_widget->set_element_lines(&em);
+    double incident_energy = _fit_params_table_model->getFitParamValue(STR_COHERENT_SCT_ENERGY);
+    _spectra_widget->set_element_lines(&em, incident_energy);
 }
 
 //---------------------------------------------------------------------------
@@ -1404,6 +1488,10 @@ void FitSpectraWidget::setFitParams(data_struct::Fit_Parameters<double>* fit_par
 void FitSpectraWidget::setElementsToFit(data_struct::Fit_Element_Map_Dict<double>* elements_to_fit)
 {
     _owned_elements_to_fit.reset();
+    // updateFitElements() rebuilds the table from elements_to_fit, which never contains custom
+    // peaks. Without this they would keep their shared_ptr here with no row left to select, so
+    // del_element() could never reach them and every dataset switch leaked another generation.
+    _custom_peaks.clear();
     _fit_elements_table_model->updateFitElements(elements_to_fit);
 	_elements_to_fit = elements_to_fit;
     update_spectra_top_axis();

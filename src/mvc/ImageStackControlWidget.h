@@ -51,6 +51,9 @@ public:
 
    void savePref();
 
+   /** Open the ROI dialog for the currently displayed analyzed dataset. */
+   bool openRoiDialog();
+
 signals:
 
 	void widgetClosed();

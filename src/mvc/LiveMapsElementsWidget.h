@@ -50,7 +50,7 @@ public:
    
 public slots:
 
-   void newDataArrived(data_struct::Stream_Block<float>* new_packet);
+   void newDataArrived(data_struct::Stream_Block_Ptr<float> new_packet);
 
    void updateIp();
 
@@ -145,7 +145,7 @@ protected:
 
    BlueskyPlan _running_scan;
 
-   std::unique_ptr<data_struct::Stream_Block<float>> _last_packet;
+   data_struct::Stream_Block_Ptr<float> _last_packet;
 
    std::string _prev_dataset_name;
 

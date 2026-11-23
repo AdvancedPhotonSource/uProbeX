@@ -31,12 +31,23 @@ SubWindow::~SubWindow()
 
 //---------------------------------------------------------------------------
 
+// Deliberately does not chain to QMdiSubWindow::closeEvent(). That base
+// implementation calls widget()->close() on the content widget, and
+// MapsElementsWidget - the content widget of every analyzed-dataset window - sets
+// Qt::WA_DeleteOnClose on itself, so chaining would schedule the content widget
+// for deletion on top of the deletion it already gets as a child of this window
+// when uProbeX::subWindowClosed() calls deleteLater() on us. Nothing is lost by
+// skipping it: none of the three content widgets overrides closeEvent, so there
+// is no veto or cleanup to run, and the QMdiArea bookkeeping happens when this
+// window is actually destroyed.
 void SubWindow::closeEvent(QCloseEvent* closeEvent)
 {
 
-   Q_UNUSED(closeEvent);
+   // Accepted explicitly rather than relying on QCloseEvent defaulting to
+   // accepted: windowClosing() is what gets this window deleted, so the two have
+   // to agree that the close is really happening.
+   closeEvent->accept();
 
-   // If window is not acquisition, just let the close event pass through.
    emit windowClosing(this);
 
 }

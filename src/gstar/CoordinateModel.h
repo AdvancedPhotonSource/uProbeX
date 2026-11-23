@@ -37,7 +37,7 @@ public:
     * @brief CoordinateModel
     * @param transformer
     */
-   CoordinateModel(ITransformer* transformer);
+   CoordinateModel(ITransformer* transformer, bool takeOwnership = true);
 
    /**
     * Destructor
@@ -70,7 +70,7 @@ public:
     * @brief setTransformer
     * @param transformer
     */
-   void setTransformer(ITransformer* transformer);
+   void setTransformer(ITransformer* transformer, bool takeOwnership = true);
 
    /**
     * @brief setTransformerPrecision
@@ -109,6 +109,8 @@ protected:
     * @brief transformer
     */
    ITransformer* m_transformer;
+
+   bool m_ownsTransformer;
 
 };
 

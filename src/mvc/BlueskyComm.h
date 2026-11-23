@@ -34,9 +34,22 @@ public:
    {
         if(str_ip.length() > 0)
         {
-            std::string conn_str = "tcp://"+str_ip.toStdString()+":60615";
-            _zmq_comm_socket = std::make_unique<zmq::socket_t>(context, ZMQ_REQ);
-            _zmq_comm_socket->connect(conn_str);
+            try
+            {
+                std::string conn_str = "tcp://"+str_ip.toStdString()+":60615";
+                _zmq_comm_socket = std::make_unique<zmq::socket_t>(context, ZMQ_REQ);
+                _zmq_comm_socket->connect(conn_str);
+            }
+            catch (const zmq::error_t& error)
+            {
+                logE << "Could not connect to QServer: " << error.what() << "\n";
+                _zmq_comm_socket.reset();
+            }
+            catch (const std::exception& error)
+            {
+                logE << "Could not initialize QServer connection: " << error.what() << "\n";
+                _zmq_comm_socket.reset();
+            }
         }
         else
         {
@@ -158,10 +171,10 @@ public:
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("environment_open", nullptr);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -194,10 +207,10 @@ public:
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("environment_close", nullptr);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -230,10 +243,10 @@ public:
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("queue_start", nullptr);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -266,10 +279,10 @@ public:
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("queue_stop", nullptr);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -306,10 +319,11 @@ public:
         params["user_group"] = "primary";
         QByteArray msg_arr = gen_send_mesg2("queue_item_add", params);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
 logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
         {
             
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
@@ -358,10 +372,11 @@ logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
         params["user_group"] = "primary";
         QByteArray msg_arr = gen_send_mesg2("queue_item_update", params);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
 logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -407,10 +422,10 @@ logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
         params["pos_dest"] = destRow;
         QByteArray msg_arr = gen_send_mesg2("queue_item_move", params);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -445,10 +460,10 @@ logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
         params["pos"] = row;
         QByteArray msg_arr = gen_send_mesg2("queue_item_remove", params);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -491,10 +506,10 @@ logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
         params["uid"] = uuid;
         QByteArray msg_arr = gen_send_mesg2("queue_item_remove", params);
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             if(reply.contains("success"))
@@ -546,10 +561,10 @@ logI<<QString::fromUtf8(msg_arr).toStdString()<<"\n";
         params["user_group"] = "primary";
         QByteArray msg_arr = gen_send_mesg("plans_allowed", &params); 
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);;
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
 logI<<message.to_string()<<"\n";
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
@@ -678,10 +693,10 @@ logI<<message.to_string()<<"\n";
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("queue_get", nullptr); 
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
 logI<<message.to_string()<<"\n";
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
@@ -817,10 +832,10 @@ logI<<message.to_string()<<"\n";
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("history_clear", nullptr); 
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             QJsonObject reply = QJsonDocument::fromJson(QByteArray::fromRawData((char*)message.data(), message.size())).object();
             msg = QString::fromUtf8((char*)message.data(), message.size());
@@ -853,10 +868,10 @@ logI<<message.to_string()<<"\n";
         zmq::message_t message;
         QByteArray msg_arr = gen_send_mesg("history_get", nullptr); 
         zmq::message_t zmsg(msg_arr.data(), msg_arr.length());
-        zmq::send_result_t s_res = _zmq_comm_socket->send(zmsg);
-
-        zmq::recv_result_t r_res = _zmq_comm_socket->recv(message);
-        if(r_res.has_value())
+        if (false == _send_and_receive(zmsg, message, msg))
+        {
+            return ret;
+        }
         {
             if(raw_mesg)
             {
@@ -970,6 +985,49 @@ logI<<message.to_string()<<"\n";
     //---------------------------------------------------------------------------
 
 protected:
+
+    bool _send_and_receive(zmq::message_t& request, zmq::message_t& response, QString& msg)
+    {
+        if (_zmq_comm_socket == nullptr)
+        {
+            msg = "QServer connection is unavailable.";
+            return false;
+        }
+
+        try
+        {
+            zmq::send_result_t sent = _zmq_comm_socket->send(request, zmq::send_flags::none);
+            if (false == sent.has_value())
+            {
+                msg = "QServer request could not be sent.";
+                return false;
+            }
+
+            zmq::recv_result_t received = _zmq_comm_socket->recv(response, zmq::recv_flags::none);
+            if (false == received.has_value())
+            {
+                msg = "QServer reply was not received.";
+                return false;
+            }
+            return true;
+        }
+        catch (const zmq::error_t& error)
+        {
+            msg = QString("QServer communication failed: %1").arg(error.what());
+            logE << msg.toStdString() << "\n";
+        }
+        catch (const std::exception& error)
+        {
+            msg = QString("QServer communication failed: %1").arg(error.what());
+            logE << msg.toStdString() << "\n";
+        }
+
+        // A REQ socket cannot safely continue its send/receive state machine after
+        // a failed exchange. Leave the object alive so callers fail cleanly rather
+        // than repeatedly throwing from a poisoned socket.
+        _zmq_comm_socket.reset();
+        return false;
+    }
 
     std::unique_ptr<zmq::socket_t> _zmq_comm_socket;
 

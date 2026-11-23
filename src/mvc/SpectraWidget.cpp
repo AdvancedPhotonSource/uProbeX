@@ -461,7 +461,7 @@ void SpectraWidget::set_vertical_line(qreal center, QString label)
 
 //---------------------------------------------------------------------------
 
-void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* element)
+void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* element, double incident_energy)
 {
 	//clear old one
 	for (QLineSeries* itr : _element_lines)
@@ -481,6 +481,7 @@ void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* elem
 
     if(element != nullptr)
     {
+        int idx = 0;
         const std::vector<data_struct::Element_Energy_Ratio<double>>& energy_ratios = element->energy_ratios();
         for(auto& itr : energy_ratios)
         {
@@ -521,25 +522,36 @@ void SpectraWidget::set_element_lines(data_struct::Fit_Element_Map<double>* elem
                 pen.setColor(QColor::fromRgb(LINE_M_R, LINE_M_G, LINE_M_B));
                 break;
             }
+            if(false == element->check_binding_energy(incident_energy,idx))
+            {
+                pen.setColor(QColor::fromRgb(128,128,128));
+            }
+            idx++;
 
             line->setPen(pen);
             line->append(itr.energy, line_min);
             //float line_ratio = data_struct::Element_Param_Percent_Map.at(itr.ptype);
             float line_ratio = itr.ratio;
-			if (itr.ratio == 0)
-			{
-				line->append(itr.energy, (line_min));
-			}
-			else
-			{
-                // Line height is the branching-ratio fraction of the current
-                // display max. When the log10 axis is active it naturally
-                // compresses this value so the line follows the log scale; on
-                // the linear axis it stays linear (the previous behavior).
-                float line_height = line_max * line_ratio;
-				line->append(itr.energy, line_height);
-			}
-		
+            if (itr.ratio == 0)
+            {
+              line->append(itr.energy, (line_min));
+            }
+            else
+            {
+                      // Line height is the branching-ratio fraction of the current
+                      // display max. When the log10 axis is active it naturally
+                      // compresses this value so the line follows the log scale; on
+                      // the linear axis it stays linear (the previous behavior).
+
+                      bool show_element_line_ratios = Preferences::inst()->getValue(STR_PFR_SHOW_ELEMENT_RATIOS).toBool();
+                      float line_height = line_max;
+                      if(show_element_line_ratios)
+                      {
+                        line_height = line_max * line_ratio;
+                      }
+                      line->append(itr.energy, line_height);
+            }
+      
             QString eName = QString(data_struct::Element_Param_Str_Map.at(itr.ptype).c_str());
 
             line->setName(eName);

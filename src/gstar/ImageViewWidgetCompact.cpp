@@ -5,6 +5,7 @@
 
 #include "gstar/ImageViewWidgetCompact.h"
 #include <QPainterPath>
+#include <algorithm>
 
 using namespace gstar;
 
@@ -148,6 +149,13 @@ void ImageViewWidgetCompact::createLayout()
     _unit_textitems.clear();
     _raw_data_items.clear();
     _sub_window.scene->clear();
+    // clear() deleted every item, so the scene's static-item list and its
+    // default pixmap pointer are now dangling. Without this, each relayout
+    // left another generation of freed pointers in that list, and
+    // removeAllAnnotationItems() decides what is static by comparing raw
+    // pointers against it - a recycled address there silently keeps a live
+    // annotation attached to the scene.
+    _sub_window.scene->clearStaticItems();
     _scale_bar_line = nullptr;
     _scale_bar_text = nullptr;
 
@@ -337,6 +345,9 @@ void ImageViewWidgetCompact::setUnitLabels(QString label)
 
 void ImageViewWidgetCompact::newGridLayout(int rows, int cols)
 {
+    // The pixmaps these belonged to are about to be destroyed; a leftover scale applied to a new
+    // image would put every pixel-to-motor lookup on the wrong measurement.
+    clearRenderScales();
 
     disconnect(_sub_window.scene, &ImageViewScene::zoomIn, this, &ImageViewWidgetCompact::zoomIn);
     disconnect(_sub_window.scene, &ImageViewScene::zoomInRect, this, &ImageViewWidgetCompact::zoomInRect);
@@ -434,9 +445,57 @@ QRectF ImageViewWidgetCompact::getSceneRect()
 
 //---------------------------------------------------------------------------
 
+bool ImageViewWidgetCompact::cellPosToDataIndex(int cell_idx, const QPointF& local_pos, int& out_col, int& out_row)
+{
+    if(cell_idx < 0 || cell_idx >= (int)_pixmaps.size() || _pixmaps[cell_idx] == nullptr)
+    {
+        return false;
+    }
+
+    int data_rows = 0;
+    int data_cols = 0;
+    auto ditr = _raw_data_items.find(cell_idx);
+    if(ditr != _raw_data_items.end())
+    {
+        data_rows = (int)ditr->second.rows();
+        data_cols = (int)ditr->second.cols();
+    }
+
+    return pixelPosToDataIndex(local_pos, _pixmaps[cell_idx]->pixmap(), data_rows, data_cols, renderScaleAt(cell_idx), out_col, out_row);
+}
+
+//---------------------------------------------------------------------------
+
 void ImageViewWidgetCompact::onMouseMoveEvent(QGraphicsSceneMouseEvent* event)
 {
+    if(event == nullptr || m_coordWidget == nullptr)
+    {
+        return;
+    }
 
+    // One scene holds the whole grid here, so the cell under the cursor has to be found first and
+    // the position converted inside it - scenePos() spans every map, not just one.
+    for(size_t i = 0; i < _pixmaps.size(); i++)
+    {
+        ClickablePixmapItem* item = _pixmaps[i];
+        if(item == nullptr)
+        {
+            continue;
+        }
+        QPointF local = item->mapFromScene(event->scenePos());
+        if(false == item->boundingRect().contains(local))
+        {
+            continue;
+        }
+
+        int col = 0;
+        int row = 0;
+        if(cellPosToDataIndex((int)i, local, col, row))
+        {
+            m_coordWidget->setCoordinate(col, row);
+        }
+        return;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -445,11 +504,28 @@ void ImageViewWidgetCompact::onMousePressEvent(QGraphicsSceneMouseEvent* event)
 {
     QGraphicsItem *item = _sub_window.scene->itemAt(event->scenePos(), QTransform());
     ClickablePixmapItem* selectedItem = qgraphicsitem_cast<ClickablePixmapItem*>(item);
-    if (selectedItem) 
+    if (selectedItem)
     {
         QPointF seletionPoint = selectedItem->last_local_intersection_point();
-        unsigned int r = (unsigned int)seletionPoint.y();
-        unsigned int c = (unsigned int)seletionPoint.x();
+        // The point is in pixmap pixels. gen_image gives each measurement a scale x scale block,
+        // so divide back down to land on the measurement the user actually clicked.
+        int cell_idx = 0;
+        for(size_t i = 0; i < _pixmaps.size(); i++)
+        {
+            if(_pixmaps[i] == selectedItem)
+            {
+                cell_idx = (int)i;
+                break;
+            }
+        }
+        int ic = 0;
+        int ir = 0;
+        if(false == cellPosToDataIndex(cell_idx, seletionPoint, ic, ir))
+        {
+            return;
+        }
+        unsigned int r = (unsigned int)ir;
+        unsigned int c = (unsigned int)ic;
         if(m_coordWidget->model() != nullptr)
         {
             double outX, outY, outZ;
@@ -825,11 +901,6 @@ void ImageViewWidgetCompact::updateMinMaxLabels()
         QRectF pixmapBounds(0, 0, pixmap.width(), pixmap.height());
         visibleRectInPixmap = visibleRectInPixmap.intersected(pixmapBounds);
         
-        unsigned int start_row = qMax(0, (int)qFloor(visibleRectInPixmap.top()));
-        unsigned int end_row = qMin(pixmap.height() - 1, (int)qCeil(visibleRectInPixmap.bottom()));
-        unsigned int start_col = qMax(0, (int)qFloor(visibleRectInPixmap.left()));
-        unsigned int end_rcol = qMin(pixmap.width() - 1, (int)qCeil(visibleRectInPixmap.right()));
-        
 /*
         QPainterPath parentClipPath = _clip_pixmaps[0]->shape();
         QPainterPath mappedClipPath = _pixmaps[0]->mapFromItem(_clip_pixmaps[0], parentClipPath);
@@ -856,13 +927,42 @@ void ImageViewWidgetCompact::updateMinMaxLabels()
         {
             if(_raw_data_items.count(idx) > 0)
             {
-                float counts_max = std::numeric_limits<float>::min();
-                float counts_min = std::numeric_limits<float>::max();
-                for(unsigned int r = start_row; r < end_row; r++)
+                const ArrayXXr<float>& raw_data = _raw_data_items.at(idx);
+                if(raw_data.size() == 0)
                 {
-                    for(unsigned int c = start_col; c < end_rcol; c++)
+                    continue;
+                }
+
+                const int render_scale = renderScaleAt(static_cast<int>(idx));
+                const int start_row = std::clamp(
+                    static_cast<int>(qFloor(visibleRectInPixmap.top() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.rows()));
+                const int end_row = std::clamp(
+                    static_cast<int>(qCeil(visibleRectInPixmap.bottom() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.rows()));
+                const int start_col = std::clamp(
+                    static_cast<int>(qFloor(visibleRectInPixmap.left() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.cols()));
+                const int end_col = std::clamp(
+                    static_cast<int>(qCeil(visibleRectInPixmap.right() / render_scale)),
+                    0,
+                    static_cast<int>(raw_data.cols()));
+
+                if(start_row >= end_row || start_col >= end_col)
+                {
+                    continue;
+                }
+
+                float counts_max = std::numeric_limits<float>::lowest();
+                float counts_min = std::numeric_limits<float>::max();
+                for(int r = start_row; r < end_row; r++)
+                {
+                    for(int c = start_col; c < end_col; c++)
                     {
-                        float val =_raw_data_items[idx](r,c);
+                        float val = raw_data(r,c);
                         counts_max = std::max(val, counts_max);
                         counts_min = std::min(val, counts_min);
                     }
@@ -955,7 +1055,9 @@ void ImageViewWidgetCompact::updateScaleBar()
         _scale_bar_text->setPlainText(QString("%1 px").arg(nice_pixels));
     }
 
-    _scale_bar_line->setLine(bar_x, bar_y, bar_x + nice_pixels, bar_y);
+    // nice_pixels counts measurements; the line is drawn in scene units, where each measurement
+    // occupies renderScaleAt() pixels.
+    _scale_bar_line->setLine(bar_x, bar_y, bar_x + (nice_pixels * (double)renderScaleAt(0)), bar_y);
 
     //_scale_bar_line->setLine(bar_x, bar_y, bar_x + bar_length, bar_y);
 
@@ -1091,7 +1193,7 @@ QString ImageViewWidgetCompact::getLabelAt(int idx)
 
 void ImageViewWidgetCompact::setCountsTrasnformAt(unsigned int idx, const ArrayXXr<float>& normalized)
 {
-    if(idx < _min_textitems.size())
+    if(idx < _min_textitems.size() && normalized.size() > 0)
     {
         _raw_data_items[idx] = ArrayXXr<float>(normalized);
         QString minStr = "min: "+ QString::number(normalized.minCoeff());
@@ -1182,7 +1284,10 @@ bool ImageViewWidgetCompact::getMinMaxAt(int grid_idx, float &counts_min, float 
 
 void ImageViewWidgetCompact::updateMinMax(unsigned int idx, const ArrayXXr<float>& normalized)
 {
-    _sub_window.on_update_min_max(normalized.minCoeff(), normalized.maxCoeff(), 0.0, 1.0, false);
+    if(normalized.size() > 0)
+    {
+        _sub_window.on_update_min_max(normalized.minCoeff(), normalized.maxCoeff(), 0.0, 1.0, false);
+    }
 }
 
 //---------------------------------------------------------------------------

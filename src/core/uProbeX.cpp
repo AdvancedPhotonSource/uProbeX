@@ -151,7 +151,7 @@ void uProbeX::check_and_set_default_pref()
     Preferences::inst()->checkAndSet(STR_PFR_LOG_10, QVariant(true));
     Preferences::inst()->checkAndSet(STR_PFR_SHOW_SCAN_QUEUE_HEADER, QVariant(true));
     Preferences::inst()->checkAndSet(STR_PRF_ScaleBarVisible, QVariant(true));
-    
+    Preferences::inst()->checkAndSet(STR_PFR_SHOW_ELEMENT_RATIOS, QVariant(true));
 }
 
 //---------------------------------------------------------------------------
@@ -161,10 +161,12 @@ bool uProbeX::checkSameFileWindow(QString& filePath)
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        // qobject_cast, not static_cast + typeid: con->widget() is not always an
+        // AbstractImageWidget (an MDA_Widget is a plain QWidget), so the downcast was
+        // UB and typeid read a vptr off a wrongly-typed object.
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            VLM_Widget* widget = static_cast<VLM_Widget*>(w);
             if(widget->getModelFileName()  == filePath)
             {
                 QMessageBox::critical(nullptr, "SWS Window",
@@ -247,14 +249,13 @@ void uProbeX::createMenuBar()
 
     connect(_menu_file, &QMenu::aboutToShow, this, &uProbeX::menuBarEnable);
 
-    // TODO: finish view options
+    // View menu
     _menu_view = std::make_unique<QMenu>("View");
-    _menu_view_file_top = _menu_view->addMenu("File Nav Top");
-    _menu_view_file_side = _menu_view->addMenu("File Nav Side");
-    _menu_view_marker = _menu_view->addMenu("Annotation : ROI");
-    //action = _menu_file->addAction("File Navigate");
-    //connect(action, &QAction::triggered, this, &uProbeX::exitApplication);
-    //m_menu->addMenu(_menu_view);
+    _action_roi_dialog = _menu_view->addAction("ROI Dialog");
+    connect(_action_roi_dialog, &QAction::triggered, this, &uProbeX::openRoiDialog);
+    connect(_menu_view.get(), &QMenu::aboutToShow, this, &uProbeX::updateRoiDialogActionEnabled);
+    m_menu->addMenu(_menu_view.get());
+    updateRoiDialogActionEnabled();
 
     // Batch menu
     _menu_batch = new QMenu("Batch Processing");
@@ -297,6 +298,108 @@ void uProbeX::setBatchActionsEnabled(bool val)
    _action_gen_scan_vlm->setEnabled(val);
    */
   _menu_batch->setEnabled(val);
+}
+
+//---------------------------------------------------------------------------
+
+void uProbeX::updateRoiDialogActionEnabled()
+{
+    if (_action_roi_dialog == nullptr)
+    {
+        return;
+    }
+
+    bool enabled = false == _mapsWorkspaceControllers.isEmpty();
+    if (false == enabled)
+    {
+        for (SubWindow* window : m_subWindows)
+        {
+            if (window != nullptr && qobject_cast<MapsElementsWidget*>(window->widget()) != nullptr)
+            {
+                enabled = true;
+                break;
+            }
+        }
+    }
+
+    _action_roi_dialog->setEnabled(enabled);
+}
+
+//---------------------------------------------------------------------------
+
+void uProbeX::openRoiDialog()
+{
+    MapsWorkspaceController* controller = nullptr;
+    if (_focused_workspace != nullptr && _mapsWorkspaceControllers.contains(_focused_workspace))
+    {
+        controller = _focused_workspace;
+    }
+    if (controller != nullptr)
+    {
+        if (controller->openRoiDialog())
+        {
+            return;
+        }
+
+        QMessageBox::information(this, "ROI Dialog",
+            "Open or select an analyzed dataset in the workspace first.");
+        return;
+    }
+
+    if (m_mdiArea != nullptr && m_mdiArea->activeSubWindow() != nullptr)
+    {
+        MapsElementsWidget* dataset = qobject_cast<MapsElementsWidget*>(m_mdiArea->activeSubWindow()->widget());
+        if (dataset != nullptr && dataset->getModel() != nullptr)
+        {
+            dataset->openRoiDialog();
+            return;
+        }
+    }
+
+    if (_mapsWorkspaceControllers.size() == 1)
+    {
+        controller = _mapsWorkspaceControllers.first();
+        if (controller != nullptr && controller->openRoiDialog())
+        {
+            return;
+        }
+
+        QMessageBox::information(this, "ROI Dialog",
+            "Open or select an analyzed dataset in the workspace first.");
+        return;
+    }
+
+    // If there is exactly one analyzed dataset window, use it even when another
+    // MDI window is currently active. More than one would be ambiguous.
+    MapsElementsWidget* only_dataset = nullptr;
+    SubWindow* only_window = nullptr;
+    for (SubWindow* window : m_subWindows)
+    {
+        MapsElementsWidget* dataset = window != nullptr
+            ? qobject_cast<MapsElementsWidget*>(window->widget()) : nullptr;
+        if (dataset == nullptr || dataset->getModel() == nullptr)
+        {
+            continue;
+        }
+        if (only_dataset != nullptr)
+        {
+            only_dataset = nullptr;
+            only_window = nullptr;
+            break;
+        }
+        only_dataset = dataset;
+        only_window = window;
+    }
+
+    if (only_dataset != nullptr)
+    {
+        m_mdiArea->setActiveSubWindow(only_window);
+        only_dataset->openRoiDialog();
+        return;
+    }
+
+    QMessageBox::information(this, "ROI Dialog",
+        "Activate an analyzed dataset, then try again.");
 }
 
 //---------------------------------------------------------------------------
@@ -524,6 +627,7 @@ void uProbeX::initialize()
     m_mdiArea = nullptr;
     _focused_workspace = nullptr;
     _batch_export_workspace = nullptr;
+    _action_roi_dialog = nullptr;
 
     // Each workspace is its own top level window, so this is the only way to know which one the
     // user means when they reach up to the main window's Batch menu.
@@ -535,8 +639,6 @@ void uProbeX::initialize()
 
 void uProbeX::onFocusChanged(QWidget* old, QWidget* now)
 {
-    Q_UNUSED(old);
-
     if (now == nullptr)
     {
         return;
@@ -550,6 +652,23 @@ void uProbeX::onFocusChanged(QWidget* old, QWidget* now)
             _focused_workspace = controller;
             return;
         }
+    }
+
+    // Clicking the main menu moves focus away from a workspace before its action
+    // fires. Preserve that workspace for the menu click, but clear a stale workspace
+    // once the user is actually working in a main-window dataset.
+    QWidget* old_win = old != nullptr ? old->window() : nullptr;
+    for (MapsWorkspaceController* controller : _mapsWorkspaceControllers)
+    {
+        if (controller != nullptr && controller->get_widget() == old_win && win == this)
+        {
+            _focused_workspace = controller;
+            return;
+        }
+    }
+    if (win == this)
+    {
+        _focused_workspace = nullptr;
     }
 }
 
@@ -645,17 +764,22 @@ void uProbeX::make_VLM_Window(QString path, bool newWindow)
     if (newWindow == false) 
         return;
 
-    VLM_Model* model = nullptr;
+    // Owned here until the widget takes it. Nothing else ever owned this model:
+    // VLM_Widget only borrows what setModel() is given, and the models it is
+    // normally handed belong to a MapsWorkspaceModel. So the success path below
+    // leaked one model per VLM file opened, and the catch freed the widget but
+    // not the model.
+    std::unique_ptr<VLM_Model> model;
     QFileInfo fileinfo(path);
 
     QString ext = fileinfo.suffix().toLower();
     if (ext == "tif" || ext == "tiff")
     {
-        model = new TIFF_Model();
+        model = std::make_unique<TIFF_Model>();
     }
     else if (ext == "sws")
     {
-        model = new SWSModel();
+        model = std::make_unique<SWSModel>();
     }
 
     if (model != nullptr)
@@ -670,11 +794,10 @@ void uProbeX::make_VLM_Window(QString path, bool newWindow)
             model->load(path);
             if (model->loaded())
             {
-                widget->setModel(model);
+                widget->setOwnedModel(std::move(model));
             }
             else
             {
-                delete model;
                 delete widget;
                 return;
             }
@@ -818,6 +941,7 @@ void uProbeX::mapsControllerClosed(MapsWorkspaceController* controller)
     {
         setBatchActionsEnabled(false);
     }
+    updateRoiDialogActionEnabled();
 }
 
 //---------------------------------------------------------------------------
@@ -869,6 +993,8 @@ void uProbeX::make_HDF_Window(std::shared_ptr<MapsH5Model> model)
     m_subWindows[w->getUuid()] = w;
 
     connect(w, &SubWindow::windowStateChanged, widget, &MapsElementsWidget::windowChanged);
+
+    updateRoiDialogActionEnabled();
 
 
 }
@@ -1013,6 +1139,7 @@ void uProbeX::openMapsWorkspace(QString dirName)
 
     mapsWorkspaceController->setWorkingDir(dirName);
     setBatchActionsEnabled(true);
+    updateRoiDialogActionEnabled();
 
 }
 
@@ -1047,11 +1174,15 @@ void uProbeX::saveScreenShot()
 
         if(m_subWindows.contains(id))
         {
-            gstar::AbstractImageWidget* imageWidget = dynamic_cast<gstar::AbstractImageWidget*>(w->widget());
+            // The dynamic_cast returns null for a non-image subwindow (an MDA_Widget is
+            // a plain QWidget), and typeid on a null pointer throws std::bad_typeid out
+            // of this QAction slot -> std::terminate. Save Screen Shot is always enabled
+            // (every setEnabled call for it is commented out), so an MDA window plus this
+            // menu item killed the application.
+            VLM_Widget* widget = qobject_cast<VLM_Widget*>(w->widget());
 
-            if(typeid(*imageWidget) == typeid(VLM_Widget))
+            if(widget != nullptr)
             {
-                VLM_Widget* widget = dynamic_cast<VLM_Widget*>(imageWidget);
                 widget->saveScreenShot();
             }
             else
@@ -1073,41 +1204,31 @@ void uProbeX::saveActivatedXML()
     {
         SubWindow* w = dynamic_cast<SubWindow*>(m_mdiArea->activeSubWindow());
         if (w == nullptr) return;
-        gstar::AbstractImageWidget* imageWidget = dynamic_cast<gstar::AbstractImageWidget*>(w->widget());
-        VLM_Widget* widget = nullptr;
-        if (imageWidget != nullptr)
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(w->widget());
+        if (widget == nullptr)
         {
-            if (typeid(*imageWidget) == typeid(VLM_Widget))
-            {
-                widget = dynamic_cast<VLM_Widget*>(imageWidget);
-            }
-            else
-            {
-                return;
-            }
-            if (widget != nullptr)
-            {
-                if (saveActivatedXmlRequired()) {
-                    QUuid id = w->getUuid();
+            return;
+        }
+        if (saveActivatedXmlRequired())
+        {
+            QUuid id = w->getUuid();
 
-                    if (m_subWindows.contains(id))
-                    {
-                        QMessageBox msgBox;
-                        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-                        msgBox.setDefaultButton(QMessageBox::No);
-                        msgBox.setIcon(QMessageBox::Question);
-                        msgBox.setText("Do you want to save the activated VLM workspace?");
-                        int ret = msgBox.exec();
+            if (m_subWindows.contains(id))
+            {
+                QMessageBox msgBox;
+                msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+                msgBox.setDefaultButton(QMessageBox::No);
+                msgBox.setIcon(QMessageBox::Question);
+                msgBox.setText("Do you want to save the activated VLM workspace?");
+                int ret = msgBox.exec();
 
-                        if (ret == QMessageBox::Yes)
-                        {
-                            widget->saveXMLCoordinateInfo();
-                        }
-                    }
+                if (ret == QMessageBox::Yes)
+                {
+                    widget->saveXMLCoordinateInfo();
                 }
-                widget->cleanUpTemoraryXMLFiles();
             }
         }
+        widget->cleanUpTemoraryXMLFiles();
     }
 
 }
@@ -1148,10 +1269,9 @@ void uProbeX::saveAllXML(bool verifyWithUser)
 
         for(SubWindow* con : m_subWindows.values())
         {
-            gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-            if(typeid(*w) == typeid(VLM_Widget))
+            widget = qobject_cast<VLM_Widget*>(con->widget());
+            if(widget != nullptr)
             {
-                widget = static_cast<VLM_Widget*>(w);
                 widget->saveXMLCoordinateInfo();
             }
         }
@@ -1167,10 +1287,9 @@ return false;
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             bool saveRequired = widget->verifySaveIsRequired();
             if (saveRequired)
             {
@@ -1189,10 +1308,9 @@ bool uProbeX::saveActivatedXmlRequired()
     return false;
     SubWindow* w = dynamic_cast<SubWindow*>(m_mdiArea->activeSubWindow());
     if (w != nullptr) {
-        gstar::AbstractImageWidget* imageWidget = dynamic_cast<gstar::AbstractImageWidget*>(w->widget());
-        if(typeid(*imageWidget) == typeid(VLM_Widget))
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(w->widget());
+        if(widget != nullptr)
         {
-            VLM_Widget* widget = dynamic_cast<VLM_Widget*>(imageWidget);
             return widget->verifySaveIsRequired();
         }
     }
@@ -1294,10 +1412,12 @@ void uProbeX::performAutoSave()
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = dynamic_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        // This one was a live crash, not just UB: the dynamic_cast yields null for an
+        // MDA_Widget subwindow and typeid(*w) then threw std::bad_typeid out of the
+        // auto-save timer slot. Having an MDA window open with auto-save on was enough.
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             widget->saveTemporaryXMLCoordinateInfo();
         }
     }
@@ -1310,14 +1430,10 @@ void uProbeX::cleanUpAutoSafeData() {
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = dynamic_cast<gstar::AbstractImageWidget*>(con->widget());
-        if (w != nullptr)
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if (widget != nullptr)
         {
-            if (typeid(*w) == typeid(VLM_Widget))
-            {
-                widget = static_cast<VLM_Widget*>(w);
-                widget->cleanUpTemoraryXMLFiles();
-            }
+            widget->cleanUpTemoraryXMLFiles();
         }
     }
 }
@@ -1354,10 +1470,10 @@ void uProbeX::showPreferences()
     QList<gstar::AbstractImageWidget*> widgetList;
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        VLM_Widget* widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widgetList.append(w);
+            widgetList.append(widget);
         }
     }
 
@@ -1411,8 +1527,19 @@ void uProbeX::subWindowClosed(SubWindow* subWindow)
         return;
 
     m_subWindows.erase(i);
-    ////delete absWinCon;
-    absWinCon = nullptr;
+    updateRoiDialogActionEnabled();
+
+    // deleteLater(), not delete. We are called from SubWindow::closeEvent() by way
+    // of windowClosing(), so a plain delete here frees the window while its own
+    // closeEvent() is still on the stack and Qt's close handling returns into it.
+    // That is why the delete below it was commented out - but dropping it only
+    // traded the crash for a leak. QMdiSubWindow is hidden rather than deleted when
+    // closed (WA_DeleteOnClose is not set on these), so the window stayed alive as
+    // a hidden child of m_mdiArea, now unreachable from m_subWindows and therefore
+    // skipped by the delete loop in ~uProbeX. With it went its content widget and
+    // whatever that holds, so an analyzed dataset kept its HDF5 file open for the
+    // rest of the session even though ~uProbeX exists to close those.
+    absWinCon->deleteLater();
 
 }
 
@@ -1425,10 +1552,9 @@ void uProbeX::updatePreference()
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             widget->preferenceChanged();
         }
     }
@@ -1444,10 +1570,9 @@ void uProbeX::updateContextMenus()
 
     for(SubWindow* con : m_subWindows.values())
     {
-        gstar::AbstractImageWidget* w = static_cast<gstar::AbstractImageWidget*>(con->widget());
-        if(typeid(*w) == typeid(VLM_Widget))
+        widget = qobject_cast<VLM_Widget*>(con->widget());
+        if(widget != nullptr)
         {
-            widget = static_cast<VLM_Widget*>(w);
             widget->updateContextMenus();
         }
     }

@@ -8,6 +8,7 @@
 #include <gstar/ImageViewWidget.h>
 #include <preferences/Preferences.h>
 #include <QSplitter>
+#include <QSignalBlocker>
 #include <QFileDialog>
 #include <QMessageBox>
 #include "io/file/aps/aps_fit_params_import.h"
@@ -89,6 +90,20 @@ void MDA_Widget::model_updated()
 {
     if(_model == nullptr)
     {
+        // The dataset is gone. Returning here used to leave every one of
+        // these holding a pointer into it: _scaler_widget kept the RAW_Model,
+        // the spectra widget kept its Params_Override and integrated spectra,
+        // and _cb_detector kept the old detector list, so one click on a
+        // stale detector entry ran onDetectorSelect() against a freed model.
+        _scaler_widget->setModel(nullptr);
+        _spectra_widget->setParamOverride(nullptr);
+        _spectra_widget->setIntegratedSpectra(nullptr);
+
+        _extra_pvs_table_widget->clearContents();
+        _extra_pvs_table_widget->setRowCount(0);
+
+        QSignalBlocker blocker(_cb_detector);
+        _cb_detector->clear();
         return;
     }
     Eigen::Index rows, cols;
@@ -250,8 +265,15 @@ void MDA_Widget::on_export_csv(QPixmap png, ArrayDr* ev, ArrayDr* int_spec, Arra
 
 void MDA_Widget::onDetectorSelect(const QString& det)
 {
+    // The only method in this class that did not check. Reachable from the
+    // detector combo, which keeps its entries across a dataset unload.
+    if (_model == nullptr)
+    {
+        return;
+    }
+
     unsigned int detector;
-    
+
     if (det == "det_sum")
     {
         detector = -1;
@@ -265,7 +287,7 @@ void MDA_Widget::onDetectorSelect(const QString& det)
     {
 		_spectra_widget->setParamOverride(po);
     }
-    
+
     _spectra_widget->setIntegratedSpectra(_model->getIntegratedSpectra(detector));
 }
 

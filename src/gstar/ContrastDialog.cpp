@@ -17,7 +17,6 @@ ContrastDialog::ContrastDialog(QWidget* parent) : QDialog(parent)
 
 	_min_max_slider = new MinMaxSlider(false);
 	connect(_min_max_slider, &MinMaxSlider::min_max_val_changed, this, &ContrastDialog::min_max_updated);
-	connect(_min_max_slider, &MinMaxSlider::min_max_val_changed, this, &ContrastDialog::min_max_updated);
 	QVBoxLayout* layout = new QVBoxLayout();
 
 	QHBoxLayout* hbox = new QHBoxLayout();

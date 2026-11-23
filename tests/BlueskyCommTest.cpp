@@ -68,7 +68,7 @@ protected:
 TEST_F(BlueskyCommTest, ConstructorWithValidIP) {
     // This test verifies the constructor creates a connection with valid IP
     EXPECT_NO_THROW({
-        BlueskyComm comm(context, test_ip);
+        BlueskyComm comm(*context, test_ip);
     });
 }
 
@@ -76,7 +76,7 @@ TEST_F(BlueskyCommTest, ConstructorWithEmptyIP) {
     // This test verifies the constructor handles empty IP gracefully
     QString empty_ip = "";
     EXPECT_NO_THROW({
-        BlueskyComm comm(context, empty_ip);
+        BlueskyComm comm(*context, empty_ip);
     });
 }
 
@@ -85,7 +85,7 @@ TEST_F(BlueskyCommTest, ConstructorWithEmptyIP) {
 //---------------------------------------------------------------------------
 
 TEST_F(BlueskyCommTest, GenSendMesgWithoutParams) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     QByteArray result = comm.gen_send_mesg("test_method", nullptr);
 
     QJsonDocument doc = QJsonDocument::fromJson(result);
@@ -96,7 +96,7 @@ TEST_F(BlueskyCommTest, GenSendMesgWithoutParams) {
 }
 
 TEST_F(BlueskyCommTest, GenSendMesgWithParams) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     std::map<QString, QString> params;
     params["key1"] = "value1";
     params["key2"] = "value2";
@@ -115,7 +115,7 @@ TEST_F(BlueskyCommTest, GenSendMesgWithParams) {
 }
 
 TEST_F(BlueskyCommTest, GenSendMesg2WithParams) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     QJsonObject params;
     params["test_key"] = "test_value";
     params["number"] = 42;
@@ -136,7 +136,7 @@ TEST_F(BlueskyCommTest, GenSendMesg2WithParams) {
 //---------------------------------------------------------------------------
 
 TEST_F(BlueskyCommTest, PlanToJsonItemBasic) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     BlueskyPlan plan;
     plan.name = "Test Plan";
     plan.type = "count";
@@ -152,7 +152,7 @@ TEST_F(BlueskyCommTest, PlanToJsonItemBasic) {
 }
 
 TEST_F(BlueskyCommTest, PlanToJsonItemWithParameters) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     BlueskyPlan plan;
     plan.name = "Test Plan";
     plan.type = "scan";
@@ -186,7 +186,7 @@ TEST_F(BlueskyCommTest, PlanToJsonItemWithParameters) {
 }
 
 TEST_F(BlueskyCommTest, PlanToJsonItemWithoutUUID) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     BlueskyPlan plan;
     plan.name = "Test Plan";
     plan.type = "count";
@@ -202,7 +202,7 @@ TEST_F(BlueskyCommTest, PlanToJsonItemWithoutUUID) {
 //---------------------------------------------------------------------------
 
 TEST_F(BlueskyCommTest, ParseArgsWithMixedTypes) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     BlueskyPlan plan;
 
     QJsonObject kwargs;
@@ -230,7 +230,7 @@ TEST_F(BlueskyCommTest, ParseArgsWithMixedTypes) {
 }
 
 TEST_F(BlueskyCommTest, ParseArgsWithEmptyObject) {
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     BlueskyPlan plan;
 
     QJsonObject kwargs; // Empty object
@@ -312,7 +312,7 @@ TEST_F(BlueskyCommTest, GetScanHistorySuccess) {
 
 TEST_F(BlueskyCommTest, OperationsWithNullSocket) {
     // Create comm with empty IP to get null socket
-    BlueskyComm comm(context, "");
+    BlueskyComm comm(*context, "");
     QString msg;
 
     // All operations should return false with null socket
